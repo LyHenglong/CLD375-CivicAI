@@ -1,0 +1,306 @@
+# CivicAI - Claude Code Execution Guide
+
+Nov 10, 2026 · @Penguin
+
+## 1. Mission
+
+You are building CivicAI, a university project due **Thursday, November 26, 2026, 11:59 pm**: a classifier that predicts whether an NYC 311 service request will be resolved within a set time, deployed on AWS EC2 behind a FastAPI backend.
+
+The student must be able to explain every step in writing and in a demo, so write simple, readable code with short comments, and explain what you did after each phase.
+
+Copy this document into a file named `CLAUDE.md` in the project root so it is available at the start of each session. The full proposal this guide implements is the document "CivicAI: NYC 311 Resolution Prediction - Project Proposal".
+
+**The assignment requires five demonstrable components:**
+
+1. Data cleaning and preprocessing, with charts and stated decisions.
+2. Feature selection, with the target and a justification for each feature.
+3. Model selection, training and testing, with a metric comparison.
+4. A meta-classifier (stacking) compared against its base models.
+5. Deployment on EC2 with an API, tested end to end.
+
+## 2. Working rules
+
+These rules override convenience. If a rule conflicts with a task, stop and ask the student.
+
+**Process**
+
+- Work one phase at a time (Section 5). At the end of each phase, run the checks, summarize what you did and what the numbers were, then **stop and wait for the student to say continue**.
+- Run your code and show real output. Never state a result you did not produce. If something fails, show the error and the fix.
+- Make small, reviewable changes. Commit to Git at the end of each phase with a clear message.
+- Fix random seeds (`random_state=42`) so results are repeatable.
+- Put explanations the student can reuse in the report into notebook markdown cells.
+
+**Data and modeling**
+
+- Never use `closed_date`, `resolution_description`, `status` or any later update column as a model input. They are only used to compute the target.
+- Fit every transformer and every target-derived statistic on the training split only.
+- Split by time (oldest requests train, newest test). Never shuffle across time.
+- Tune and compare models with the training and validation data. Touch the test set once, at the end.
+- If the data pull fails or returns less than expected, say so. Never invent or simulate data.
+- If a decision would change the target variable or threshold, ask the student first.
+
+**Security and cost**
+
+- Never read, print, write or commit `.pem` files, AWS keys, tokens or `.env` files. Keep them in `.gitignore`.
+- Do not run `aws`, `ssh` or `scp` commands, and do not create or start AWS resources. Write the commands into `deploy/ec2_setup.md` for the student to run.
+- Do not install system-wide packages. Use the project virtual environment only.
+
+**Code quality**
+
+- Pin versions in `requirements.txt` after the code works. The same scikit-learn version must be used locally and on EC2.
+- Validate all API input and return clear error messages.
+- Keep dependencies small so the API installs quickly on a small server.
+
+## 3. Project facts
+
+These decisions are fixed unless the student changes them.
+
+| Item | Decision |
+| --- | --- |
+| Task | Binary classification: will a request be resolved within the threshold? |
+| Target | `resolved_within_7d` = 1 if `closed_date` minus `created_date` is 7 days or less, else 0 |
+| Threshold rule | Keep 7 days. If the smaller class is under about 20% of rows, ask the student before switching to the median duration |
+| Data source | NYC Open Data "311 Service Requests from 2020 to Present", dataset id `erm2-nwe9`, via the Socrata API |
+| API pattern | `https://data.cityofnewyork.us/resource/erm2-nwe9.json` with `$limit`, `$offset`, `$where` and `$order`; confirm parameter names in the Socrata documentation before relying on them |
+| Sample | 150,000 to 300,000 closed requests, spread across months, saved unchanged to `data/raw/` |
+| Candidate features | `complaint_type`, `descriptor`, `borough`, `incident_zip`, `location_type`, `open_data_channel_type`, `latitude`, `longitude`, plus hour, weekday, month and weekend flag from `created_date`; `agency` only if known at filing |
+| Excluded columns | `closed_date` (target source only), `resolution_description`, `status`, later update timestamps |
+| Split | By `created_date`: oldest 70% train, next 15% validation, newest 15% test; report the exact date ranges |
+| Models | Majority-class baseline, Logistic Regression, Random Forest, gradient boosting (XGBoost or `HistGradientBoostingClassifier`) |
+| Meta-classifier | `StackingClassifier` over the three real models, final estimator Logistic Regression, `cv=5`, probability outputs |
+| Metrics | Accuracy, precision, recall, macro F1, ROC-AUC, confusion matrix |
+| Saved artifact | One scikit-learn `Pipeline` (preprocessing plus stack) saved with `joblib` as `models/model.joblib` |
+| Backend | FastAPI with Uvicorn on Ubuntu EC2 |
+| Python | 3.10 or newer; record exact versions in `models/model_meta.json` |
+
+## 4. Repository structure
+
+Create this layout in Phase 0 and keep to it. Notebooks hold the exploration the student presents; `src/` holds the reproducible code; `app/` is the only part that runs on EC2.
+
+```text
+civicai-ec2/
+  CLAUDE.md
+  README.md
+  requirements.txt
+  .gitignore              # data/, models/, .env, *.pem, __pycache__/
+  data/
+    raw/                  # unchanged API pull
+    processed/            # cleaned data and splits
+    sample_requests.json  # example API inputs
+  notebooks/
+    01_data_cleaning_eda.ipynb
+    02_feature_selection.ipynb
+    03_model_comparison.ipynb
+    04_stacking_meta_classifier.ipynb
+  src/
+    fetch_data.py
+    preprocessing.py
+    features.py
+    train.py
+    evaluate.py
+  models/
+    model.joblib
+    metrics.json
+    model_meta.json
+  reports/
+    figures/
+    summary.md
+  app/
+    main.py
+    schemas.py
+    predictor.py
+    streamlit_app.py      # optional
+  tests/
+    test_api.py
+  deploy/
+    civicai.service
+    ec2_setup.md
+  docs/
+    screenshots/
+```
+
+## 5. Build phases
+
+Do the phases in order. Each phase ends with its acceptance check, a short summary, a Git commit, and a stop for the student's approval.
+
+| Phase | Target dates | What to do | Done when |
+| --- | --- | --- | --- |
+| 0. Setup | Nov 10 | Create the layout in Section 4, a virtual environment, `.gitignore`, and `requirements.txt` with pandas, numpy, scikit-learn, xgboost, matplotlib, seaborn, joblib, pyarrow, jupyter, fastapi, uvicorn, pydantic, requests, pytest and httpx; run `git init` | `pip install -r requirements.txt` succeeds and the folders exist |
+| 1. Data pull | Nov 10-11 | Write `src/fetch_data.py`: page through the Socrata API with `status = Closed` and a date range, retry on errors, resume if interrupted, save unchanged to `data/raw/` | File holds at least 150,000 rows; printed row count, date range and nulls per column |
+| 2. Target and threshold check | Nov 12 | Compute duration in hours, drop rows with missing or negative durations, plot the duration histogram and class balance for the 7-day target | Class shares printed and a threshold recommendation made; **stop and ask the student to confirm** |
+| 3. Cleaning and EDA | Nov 12-14 | In notebook 01, check and handle missing values, duplicates by `unique_key`, outliers, inconsistent text, wrong types; save every chart to `reports/figures/`; keep a cleaning log table | Each issue has a check, a chart and a stated fix; `data/processed/clean.parquet` saved |
+| 4. Features and pipeline | Nov 15-16 | Write `src/features.py` and `src/preprocessing.py`; derive hour, weekday, month, weekend flag; build a `ColumnTransformer` in a `Pipeline`; make the chronological split; rank relevance in notebook 02 with mutual information and tree importance | Pipeline fits on train only; split date ranges printed; an assert confirms no excluded column is in the inputs; kept and dropped features listed with reasons |
+| 5. Model comparison | Nov 17-18 | In notebook 03 and `src/train.py`, train the baseline and the three models, cross-validate on train, score on validation, tune lightly, save `reports/model_comparison.csv`, ROC curves and confusion matrices | One table compares all models on the same split; best single model named with the metric used |
+| 6. Stacking | Nov 18-19 | In notebook 04, build the `StackingClassifier`, compare it with each base model, score the test set once, save `models/model.joblib`, `metrics.json` and `model_meta.json` | Stack versus base models table done; the saved pipeline loads in a fresh Python process and predicts one example |
+| 7. API | Nov 20-21 | Build the FastAPI app as specified in Section 6 and the tests in `tests/test_api.py` | `pytest` passes; `uvicorn app.main:app` runs locally; `/docs` shows the routes |
+| 8. Deployment files | Nov 21-22 | Write `deploy/civicai.service` and `deploy/ec2_setup.md` (Section 7); the student runs them on EC2 | The student reports that `GET /health` works at the public address |
+| 9. End-to-end tests | Nov 23-24 | Make `tests/test_api.py` run against a remote URL from the `API_URL` environment variable; add a Postman collection under `docs/`; list the screenshots the student must capture | Valid and invalid requests behave as in Section 6 against the live EC2 API |
+| 10. Report support | Nov 24-25 | Write `reports/summary.md` with results tables, figure list and limitations, and a `README.md` with run steps | Every number in the summary comes from a saved results file |
+
+## 6. API specification
+
+The API accepts a request's raw fields, derives hour, weekday, month and weekend flag on the server with the same code used in training, and returns the model's prediction.
+
+| Route | Purpose |
+| --- | --- |
+| `GET /health` | Returns 200 with the model version when the model is loaded |
+| `POST /predict` | Takes one request as JSON and returns the prediction |
+| `GET /docs` | Swagger UI generated by FastAPI |
+
+**Example request**
+
+```json
+{
+  "complaint_type": "Noise - Residential",
+  "descriptor": "Loud Music/Party",
+  "borough": "BROOKLYN",
+  "location_type": "Residential Building/House",
+  "open_data_channel_type": "PHONE",
+  "incident_zip": "11201",
+  "latitude": 40.69,
+  "longitude": -73.99,
+  "created_at": "2026-11-09T22:15:00"
+}
+```
+
+**Example response** (values are illustrative)
+
+```json
+{
+  "predicted_class": 1,
+  "label": "resolved within 7 days",
+  "probability_within_threshold": 0.82,
+  "threshold_days": 7,
+  "model_version": "1.0"
+}
+```
+
+**Rules**
+
+- Define the input with a Pydantic model in `app/schemas.py`. Required fields: `complaint_type`, `borough`, `open_data_channel_type`, `created_at`. The others are optional and default to "Unknown" or missing.
+- Check ranges: latitude and longitude must be plausible numbers, and `created_at` must be a valid ISO date and time.
+- Load `models/model.joblib` once at startup in `app/predictor.py`, not on every request.
+- Missing or invalid fields return 422 with the field named. A category the model never saw still returns a prediction, because the encoder ignores unknown values.
+- If the model fails to load, `/health` and `/predict` return 503 with a clear message. Never return a Python stack trace to the client.
+- Log each request and prediction to a local file for later review.
+
+## 7. EC2 deployment
+
+You write the files and the step-by-step commands. The student runs them on their own AWS account, because you must not hold AWS credentials or key files.
+
+**Write `deploy/ec2_setup.md` with these steps, each with the exact command:**
+
+1. Launch an Ubuntu EC2 instance. Start small, and check the model file size and memory use before choosing. Check current pricing and free-tier terms first.
+2. Create a key pair and a security group: SSH only from the student's IP, and one TCP port for the API (8000).
+3. Connect over SSH and install `python3-venv` and `python3-pip`.
+4. Copy `app/`, `models/model.joblib`, `models/model_meta.json` and `requirements.txt` to the server with `scp`.
+5. Create a virtual environment on the server and install the pinned requirements. The scikit-learn version must match `model_meta.json`.
+6. Test by running `uvicorn app.main:app --host 0.0.0.0 --port 8000`, then call `GET /health` from the student's laptop using the instance's public address.
+7. Install the `systemd` service below so the API restarts and survives closing the terminal.
+8. Stop the instance when not testing. Its public address changes after a stop and start unless an Elastic IP is attached, so update `API_URL` each time.
+
+**Write `deploy/civicai.service`:**
+
+```ini
+[Unit]
+Description=CivicAI API
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/civicai
+ExecStart=/home/ubuntu/civicai/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+After the student confirms the instance is running, you may call the public `/health` and `/predict` routes with `curl` or `pytest` using the `API_URL` the student provides. Do not touch AWS itself.
+
+## 8. Ready-to-paste prompts
+
+Start each session in the project folder. Paste one prompt at a time and review the result before sending the next.
+
+**Start of the project**
+
+```text
+Read CLAUDE.md fully. Do Phase 0 only: create the folder layout, virtual environment, .gitignore, requirements.txt and git repo. Run pip install and show that it works. Then summarize and stop.
+```
+
+**Phases 1 and 2: data and threshold**
+
+```text
+Do Phase 1: write src/fetch_data.py to pull closed NYC 311 requests from the Socrata API into data/raw/. Print row count, date range and nulls per column. Then do Phase 2: compute the target, show class balance and a duration histogram, and recommend the threshold. Stop and ask me to confirm.
+```
+
+**Phase 3: cleaning and EDA**
+
+```text
+Do Phase 3 in notebooks/01_data_cleaning_eda.ipynb. For missing values, duplicates, outliers, inconsistent values and wrong types: show the check, a chart saved to reports/figures/, and the fix, with a short markdown explanation of each decision. Save data/processed/clean.parquet and a cleaning log table. Stop when done.
+```
+
+**Phase 4: features and pipeline**
+
+```text
+Do Phase 4. Build src/features.py and src/preprocessing.py with a ColumnTransformer inside a Pipeline, make the chronological split, and rank feature relevance in notebooks/02_feature_selection.ipynb. Add an assert that no excluded column is used as an input. Show the kept and dropped features with reasons. Stop when done.
+```
+
+**Phases 5 and 6: models and stacking**
+
+```text
+Do Phase 5: train the majority baseline, Logistic Regression, Random Forest and gradient boosting, cross-validate on the training split, and compare them on the validation split in one table. Stop and show me. After I approve, do Phase 6: build the StackingClassifier, compare it with each base model, score the test set once, save models/model.joblib, metrics.json and model_meta.json, and prove the saved pipeline loads in a fresh process.
+```
+
+**Phase 7: API**
+
+```text
+Do Phase 7 using Section 6 of CLAUDE.md: app/main.py, schemas.py, predictor.py, and tests/test_api.py. Run pytest and start the server locally. Show a valid request, a missing-field request and an invalid-value request with their responses.
+```
+
+**Phases 8 and 9: deployment files and live tests**
+
+```text
+Do Phase 8: write deploy/ec2_setup.md and deploy/civicai.service. Do not run any AWS, ssh or scp command. Stop. After I confirm the API is running on EC2, I will give you API_URL; then do Phase 9: run tests against it, create the Postman collection, and list the screenshots I must take.
+```
+
+**Phase 10: report support**
+
+```text
+Do Phase 10: write reports/summary.md with results tables taken only from saved results files, the list of figures and the limitations, and write README.md with run steps. Do not write the final report prose.
+```
+
+## 9. Definition of done
+
+The project is finished when every box is ticked and the student can explain each item. Tick them only after checking the evidence.
+
+**Data cleaning and preprocessing**
+
+- [ ] Raw sample saved unchanged; row count and date range recorded
+- [ ] Missing values, duplicates, outliers, inconsistent values and wrong types each checked, charted and handled
+- [ ] Cleaning log table and saved charts in `reports/figures/`
+
+**Feature selection**
+
+- [ ] Target defined and class balance shown
+- [ ] Each kept and dropped feature listed with a reason and a relevance measure
+- [ ] Assert in code that no excluded column reaches the model
+
+**Model selection and meta-classifier**
+
+- [ ] Baseline plus three models compared in one table on the same split
+- [ ] `StackingClassifier` compared with each base model, with F1, ROC-AUC and confusion matrices
+- [ ] Test set scored once; results saved in `models/metrics.json`
+
+**EC2 deployment and testing**
+
+- [ ] Saved pipeline loads in a fresh process and predicts
+- [ ] API running on EC2 under `systemd`; `/health` answers from the student's laptop
+- [ ] Tests pass locally and against `API_URL`: valid, edge, missing field, wrong value
+- [ ] Postman collection and screenshots saved in `docs/`
+
+**Hand-off**
+
+- [ ] `README.md` with run steps and `reports/summary.md` with results
+- [ ] No secrets, keys or raw data in Git
+- [ ] EC2 instance stopped after the demonstration
