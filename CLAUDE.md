@@ -59,14 +59,14 @@ These decisions are fixed unless the student changes them.
 | --- | --- |
 | Task | Binary classification: will a request be resolved within the threshold? |
 | Target | `resolved_within_7d` = 1 if `closed_date` minus `created_date` is 7 days or less, else 0 |
-| Threshold rule | Keep 7 days. If the smaller class is under about 20% of rows, ask the student before switching to the median duration |
+| Threshold rule | 7 days, confirmed by the student after Phase 2. The smaller class (not resolved within 7 days) is 17.2% of training rows, so models use class weights and are judged on macro F1 and ROC-AUC. Do not change the threshold without asking the student |
 | Data source | NYC Open Data "311 Service Requests from 2020 to Present", dataset id `erm2-nwe9`, via the Socrata API |
 | API pattern | `https://data.cityofnewyork.us/resource/erm2-nwe9.json` with `$limit`, `$offset`, `$where` and `$order`; confirm parameter names in the Socrata documentation before relying on them |
 | Sample | 150,000 to 300,000 closed requests, spread across months, saved unchanged to `data/raw/` |
-| Candidate features | `complaint_type`, `descriptor`, `borough`, `incident_zip`, `location_type`, `open_data_channel_type`, `latitude`, `longitude`, plus hour, weekday, month and weekend flag from `created_date`; `agency` only if known at filing |
+| Final features (12) | `complaint_type`, `descriptor`, `location_type`, `open_data_channel_type`, `borough`, `incident_zip`, `latitude`, `longitude`, and `hour`, `weekday`, `month`, `is_weekend` derived from `created_date`. Chosen in Phase 4 (`notebooks/02_feature_selection.ipynb`); the list is `FINAL_FEATURES` in `src/features.py`. `agency`, `address_type` and `community_board` were dropped because an API caller cannot supply them |
 | Excluded columns | `closed_date` (target source only), `resolution_description`, `status`, later update timestamps |
-| Split | By `created_date`: oldest 70% train, next 15% validation, newest 15% test; report the exact date ranges |
-| Models | Majority-class baseline, Logistic Regression, Random Forest, gradient boosting (XGBoost or `HistGradientBoostingClassifier`) |
+| Split | By `created_date`, 198,867 cleaned rows: train 139,206 rows (2024-01-01 00:00 to 2025-12-02 20:45), validation 29,830 rows (2025-12-02 20:48 to 2026-04-14 21:10), test 29,831 rows (2026-04-14 21:11 to 2026-08-31 23:59). Saved as `train.parquet`, `val.parquet` and `test.parquet` in `data/processed/` |
+| Models | Majority-class baseline, Logistic Regression, Random Forest, gradient boosting with `XGBClassifier` (the pipeline output is sparse, which `HistGradientBoostingClassifier` cannot take) |
 | Meta-classifier | `StackingClassifier` over the three real models, final estimator Logistic Regression, `cv=5`, probability outputs |
 | Metrics | Accuracy, precision, recall, macro F1, ROC-AUC, confusion matrix |
 | Saved artifact | One scikit-learn `Pipeline` (preprocessing plus stack) saved with `joblib` as `models/model.joblib` |
@@ -193,9 +193,9 @@ You write the files and the step-by-step commands. The student runs them on thei
 1. Launch an Ubuntu EC2 instance. Start small, and check the model file size and memory use before choosing. Check current pricing and free-tier terms first.
 2. Create a key pair and a security group: SSH only from the student's IP, and one TCP port for the API (8000).
 3. Connect over SSH and install `python3-venv` and `python3-pip`.
-4. Copy `app/`, `models/model.joblib`, `models/model_meta.json` and `requirements.txt` to the server with `scp`.
+4. Copy `app/`, `src/__init__.py`, `src/preprocessing.py`, `src/features.py`, `models/model.joblib`, `models/model_meta.json` and `requirements.txt` to the server with `scp`, keeping the same folder layout. The saved pipeline needs the three `src/` files to load. `models/cleaning_values.json` is not needed on the server.
 5. Create a virtual environment on the server and install the pinned requirements. The scikit-learn version must match `model_meta.json`.
-6. Test by running `uvicorn app.main:app --host 0.0.0.0 --port 8000`, then call `GET /health` from the student's laptop using the instance's public address.
+6. Test by running `uvicorn app.main:app --host 0.0.0.0 --port 8000` from the project root (so that `src` can be imported), then call `GET /health` from the student's laptop using the instance's public address.
 7. Install the `systemd` service below so the API restarts and survives closing the terminal.
 8. Stop the instance when not testing. Its public address changes after a stop and start unless an Elastic IP is attached, so update `API_URL` each time.
 

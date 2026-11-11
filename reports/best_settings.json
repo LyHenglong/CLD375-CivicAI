@@ -1,0 +1,16 @@
+{
+  "Logistic Regression": {
+    "C": 0.3
+  },
+  "Random Forest": {
+    "n_estimators": 150,
+    "max_depth": 40,
+    "min_samples_leaf": 5
+  },
+  "XGBoost": {
+    "n_estimators": 600,
+    "learning_rate": 0.05,
+    "max_depth": 8,
+    "scale_pos_weight": 0.4556
+  }
+}
