@@ -63,6 +63,9 @@ def standardize_text(series):
     """Trim spaces, collapse repeated spaces and upper-case. Placeholders become missing."""
     text = series.astype("string").str.strip().str.replace(r"\s+", " ", regex=True).str.upper()
     is_placeholder = text.str.lower().isin(PLACEHOLDERS)
+    # A value that is literally "other" joins the "Other" group used for rare
+    # categories. This also means cleaning an already-clean value changes nothing.
+    text = text.mask((text == OTHER.upper()).fillna(False), OTHER)
     return text.mask(is_placeholder)
 
 
@@ -72,7 +75,9 @@ def clean_zip(series):
     valid = (zip_text.str.fullmatch(r"\d{5}", na=False)
              & zip_text.str[:3].isin(NYC_ZIP_PREFIXES)
              & ~zip_text.isin(FAKE_ZIPS))
-    return zip_text.where(valid)
+    # "Other" is the label given to rare ZIP codes by apply_rare_categories;
+    # keeping it means cleaning an already-clean value changes nothing.
+    return zip_text.where(valid | (zip_text == OTHER).fillna(False))
 
 
 def clean_coordinates(df):

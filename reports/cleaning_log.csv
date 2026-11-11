@@ -28,4 +28,4 @@ Outliers,"closed_date missing, so no duration and no target",702,Rows dropped
 Outliers,"Coordinates outside the NYC box (lat 40.47-40.93, lon -74.27 to -73.68)",0,None found; rule kept in clean_coordinates for API input
 Outliers,created_date outside 2024-01-01 to 2026-08-31,0,None found
 Outliers,created_date at exactly 00:00:00 (hour probably not recorded),134,Kept: too few to affect the hour feature
-Rare categories,Categories with fewer than 50 rows in the training period (9 text columns),11020,Replaced by 'Other' (715 categories); kept lists saved to models/cleaning_values.json
+Rare categories,Categories with fewer than 50 rows in the training period (9 text columns),12023,Replaced by 'Other' (715 categories); kept lists saved to models/cleaning_values.json
