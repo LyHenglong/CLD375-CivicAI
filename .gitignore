@@ -1,4 +1,4 @@
-﻿venv/
+venv/
 .venv/
 data/raw/*
 data/processed/*
@@ -12,5 +12,7 @@ __pycache__/
 # model files (keep the folder via .gitkeep)
 models/*
 !models/.gitkeep
+# small text file of cleaning values, needed by the API (not a model file)
+!models/cleaning_values.json
 !data/raw/.gitkeep
 !data/processed/.gitkeep

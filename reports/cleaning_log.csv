@@ -1,0 +1,31 @@
+issue,check,rows_affected,action
+Wrong types,created_date / closed_date stored as text; values that fail to parse,0,Converted to datetime; no parsing failures
+Wrong types,latitude / longitude stored as text; values that are not numbers,0,Converted to numbers; no failures
+Wrong types,incident_zip not 5 digits or not an NYC ZIP code,36,Kept as 5-digit text; invalid values set to 'Unknown'
+Inconsistent data,Text with different case or extra spaces in kept text columns,52,"Trimmed, single-spaced and upper-cased; 6 duplicate spellings merged"
+Inconsistent data,"Placeholder values in borough (Unspecified, N/A, UNKNOWN)",147,Mapped to 'Unknown'
+Inconsistent data,"Placeholder values in open_data_channel_type (Unspecified, N/A, UNKNOWN)",15276,Mapped to 'Unknown'
+Inconsistent data,"Placeholder values in descriptor (Unspecified, N/A, UNKNOWN)",4176,Mapped to 'Unknown'
+Inconsistent data,"Placeholder values in location_type (Unspecified, N/A, UNKNOWN)",81,Mapped to 'Unknown'
+Inconsistent data,"Placeholder values in community_board (Unspecified, N/A, UNKNOWN)",2617,Mapped to 'Unknown'
+Missing values,Columns more than 95% empty (null or placeholder) in the training period,0,"No rows removed. Dropped 10 columns: taxi_company_borough, road_ramp, bridge_highway_direction, facility_type, park_facility_name, due_date, bridge_highway_segment, bridge_highway_name, taxi_pick_up_location, vehicle_type"
+Missing values,"Remaining columns that leak the answer, repeat another column or are free-text addresses",0,No rows removed. Dropped 21 more columns (see the rule table in notebook 2.3)
+Missing values,"descriptor empty, placeholder or invalid (includes the placeholder rows listed above)",5152,Filled with 'Unknown'
+Missing values,"location_type empty, placeholder or invalid (includes the placeholder rows listed above)",24080,Filled with 'Unknown'
+Missing values,"incident_zip empty, placeholder or invalid (includes the placeholder rows listed above)",1843,Filled with 'Unknown'
+Missing values,"address_type empty, placeholder or invalid (includes the placeholder rows listed above)",921,Filled with 'Unknown'
+Missing values,"community_board empty, placeholder or invalid (includes the placeholder rows listed above)",2617,Filled with 'Unknown'
+Missing values,"borough empty, placeholder or invalid (includes the placeholder rows listed above)",147,Filled with 'Unknown'
+Missing values,"open_data_channel_type empty, placeholder or invalid (includes the placeholder rows listed above)",15276,Filled with 'Unknown'
+Missing values,latitude / longitude empty,3296,Left missing (NaN); the model pipeline handles it in Phase 4
+Duplicates,Same unique_key more than once,0,Exact duplicates removed (none found)
+Duplicates,Rows identical in all 44 columns,0,Exact duplicates removed (none found)
+Duplicates,"Near-duplicates: same complaint type, address and created_date, different unique_key",119,Kept: each is a separate request with its own id
+Outliers,Durations longer than 365 days,511,"Kept: real slow requests; the target is yes/no, so extreme values cannot distort it"
+Outliers,Zero duration (closed_date equals created_date),3458,"Kept: a systematic pattern of a few agencies, not random errors"
+Outliers,Negative duration (closed before created),11,Rows dropped
+Outliers,"closed_date missing, so no duration and no target",702,Rows dropped
+Outliers,"Coordinates outside the NYC box (lat 40.47-40.93, lon -74.27 to -73.68)",0,None found; rule kept in clean_coordinates for API input
+Outliers,created_date outside 2024-01-01 to 2026-08-31,0,None found
+Outliers,created_date at exactly 00:00:00 (hour probably not recorded),134,Kept: too few to affect the hour feature
+Rare categories,Categories with fewer than 50 rows in the training period (9 text columns),11020,Replaced by 'Other' (715 categories); kept lists saved to models/cleaning_values.json
