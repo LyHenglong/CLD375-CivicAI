@@ -21,12 +21,14 @@ import pandas as pd
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.dummy import DummyClassifier
 from sklearn.base import clone
-from sklearn.ensemble import ExtraTreesClassifier, RandomForestClassifier, StackingClassifier
+from sklearn.ensemble import (ExtraTreesClassifier, GradientBoostingClassifier, RandomForestClassifier,
+                              StackingClassifier)
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (accuracy_score, confusion_matrix, f1_score,
                              precision_recall_fscore_support, roc_auc_score)
 from sklearn.naive_bayes import BernoulliNB
-from sklearn.model_selection import StratifiedKFold, TimeSeriesSplit, cross_val_predict, cross_validate
+from sklearn.model_selection import (FixedThresholdClassifier, StratifiedKFold, TimeSeriesSplit,
+                                     cross_val_predict, cross_validate)
 from sklearn.pipeline import Pipeline
 from sklearn.tree import DecisionTreeClassifier
 from xgboost import XGBClassifier
@@ -37,7 +39,8 @@ SEED = 42
 CV_FOLDS = 5
 BEST_SETTINGS_FILE = Path("reports/best_settings.json")
 TUNING_FILE = Path("reports/tuning_results.csv")
-STACK_FINAL_KEY = "Stacking final estimator"        # its entry in best_settings.json
+STACK_FINAL_KEY = "Stacking final estimator"        # its entry in best_settings.json (v1 stack)
+STACK_V2_KEY = "Stack v2"                           # the improved stack of Phase 6b
 STACK_VALIDATION_FILE = Path("reports/stacking_validation.csv")
 MODEL_FILE = Path("models/model.joblib")
 
@@ -259,10 +262,15 @@ def evaluate(model, X, y):
     return score_table(y, predicted, probability), probability
 
 
-def evaluate_probability(y, probability):
-    """Same metrics from probabilities alone (class 1 when the probability is above 0.5)."""
+def evaluate_probability(y, probability, threshold=None):
+    """Same metrics from probabilities alone.
+
+    Without a threshold: class 1 when the probability is above 0.5 (as in Phases 5 and 6).
+    With a threshold: class 1 when the probability is at or above it (as FixedThresholdClassifier does).
+    """
     probability = np.asarray(probability)
-    return score_table(y, (probability > 0.5).astype(int), probability)
+    predicted = (probability > 0.5) if threshold is None else (probability >= threshold)
+    return score_table(y, predicted.astype(int), probability)
 
 
 def score_table(y, predicted, probability):
@@ -385,14 +393,94 @@ def tune_final_estimator(oof_train, y_train, base_valid, y_valid):
 
 def stack_weights(pipeline):
     """What the meta-model learned: one weight per base model (applied to its probability)."""
-    meta = pipeline["stack"].final_estimator_
-    weights = pd.Series(meta.coef_[0], index=list(STACK_MODELS))
+    stack = ft.get_stack(pipeline)
+    meta = stack.final_estimator_
+    weights = pd.Series(meta.coef_[0], index=[name for name, _ in stack.estimators])
     return weights, float(meta.intercept_[0])
 
 
 def final_estimator_settings(best_settings):
     """The chosen final-estimator setting, from best_settings.json (null = no class weight)."""
     return best_settings[STACK_FINAL_KEY]
+
+
+# ---------------------------------------------------------------- improved stack (Phase 6b)
+THRESHOLD_GRID = np.round(np.arange(0.05, 0.951, 0.01), 2)
+
+
+def base_library(best_settings):
+    """Every base model that a Phase 6b stack may use: key -> (model name, settings)."""
+    shallow = {"n_estimators": 300, "learning_rate": 0.1, "max_depth": 4,
+               "scale_pos_weight": best_settings["XGBoost"]["scale_pos_weight"]}       # a setting from the Phase 5 list
+    return {
+        "xgboost": ("XGBoost", best_settings["XGBoost"]),                               # depth 8
+        "xgboost_shallow": ("XGBoost", shallow),                                        # depth 4
+        "logistic_regression": ("Logistic Regression", best_settings["Logistic Regression"]),
+        "naive_bayes": ("Bernoulli Naive Bayes", best_settings["Bernoulli Naive Bayes"]),
+        "random_forest": ("Random Forest", best_settings["Random Forest"]),
+    }
+
+
+def make_meta(final):
+    """The final estimator of a stack, from its description.
+
+    {"type": "logistic", "class_weight": ..., "C": ...}   Logistic Regression
+    {"type": "gbm"}                                       a small gradient boosting (100 trees of depth 2)
+    """
+    if final["type"] == "logistic":
+        return make_final_estimator(final)
+    if final["type"] == "gbm":
+        return GradientBoostingClassifier(n_estimators=100, max_depth=2, learning_rate=0.1, random_state=SEED)
+    raise ValueError(f"unknown final estimator: {final}")
+
+
+def macro_f1_by_threshold(y, probability):
+    """Macro F1 for every cut-off in THRESHOLD_GRID (class 1 when probability >= cut-off)."""
+    y = np.asarray(y)
+    probability = np.asarray(probability)
+    return pd.Series([f1_score(y, probability >= t, average="macro") for t in THRESHOLD_GRID], index=THRESHOLD_GRID)
+
+
+def choose_threshold(y, probability):
+    """The cut-off with the highest macro F1. Only ever called with TRAINING out-of-fold predictions."""
+    return float(macro_f1_by_threshold(y, probability).idxmax())
+
+
+def meta_out_of_fold(final, oof_train, y_train):
+    """Out-of-fold probabilities of the STACK for the training rows.
+
+    The final estimator is cross-validated on the base models' out-of-fold probabilities,
+    so no training row is predicted by a model (base or final) that has seen it.
+    """
+    return cross_val_predict(make_meta(final), oof_train, y_train, cv=stack_folds(), method="predict_proba")[:, 1]
+
+
+def run_stack_experiment(members, final, oof_train, y_train, base_valid, y_valid):
+    """One stack variant: fit the final estimator on the out-of-fold probabilities of the training
+    split, choose the cut-off on the training split, score on the validation split."""
+    columns = list(members)
+    meta = make_meta(final).fit(oof_train[columns], y_train)
+    threshold = choose_threshold(y_train, meta_out_of_fold(final, oof_train[columns], y_train))
+    valid_probability = meta.predict_proba(base_valid[columns])[:, 1]
+    result = evaluate_probability(y_valid, valid_probability, threshold)
+    result["threshold"] = threshold
+    result["macro_f1_at_0.5"] = evaluate_probability(y_valid, valid_probability)["macro_f1"]
+    return result, valid_probability
+
+
+def build_stack_v2(best_settings, config):
+    """The Phase 6b model: clean -> stack -> cut-off.
+
+    config = {"members": [...keys of base_library...], "final": {...}, "threshold": 0.xx}
+    The StackingClassifier is wrapped in a FixedThresholdClassifier, so predict() uses the
+    chosen cut-off while predict_proba() is unchanged.
+    """
+    library = base_library(best_settings)
+    estimators = [(key, make_base_pipeline(*library[key])) for key in config["members"]]
+    stack = StackingClassifier(estimators=estimators, final_estimator=make_meta(config["final"]),
+                               cv=stack_folds(), stack_method="predict_proba", passthrough=False)
+    with_cutoff = FixedThresholdClassifier(stack, threshold=config["threshold"], response_method="predict_proba")
+    return Pipeline([("clean", ft.RequestCleaner(features=list(ft.FINAL_FEATURES))), ("stack", with_cutoff)])
 
 
 # ---------------------------------------------------------------- re-check
@@ -403,17 +491,26 @@ if __name__ == "__main__":
     X_val, y_val = load_xy("val")                    # the test split is never read here
     best_settings = json.loads(BEST_SETTINGS_FILE.read_text(encoding="utf-8"))
     if "--candidates" not in sys.argv:
-        stack_final = final_estimator_settings(best_settings)
-        print(f"Rebuilding the stack (final estimator {stack_final}) and fitting it on the training split...")
-        stack_model = build_stack(best_settings, stack_final)
+        if STACK_V2_KEY in best_settings and "--v1" not in sys.argv:
+            config = best_settings[STACK_V2_KEY]
+            print(f"Rebuilding the v2 stack {config} and fitting it on the training split...")
+            stack_model = build_stack_v2(best_settings, config)
+            saved_row, saved_file = "Stack v2", Path("reports/stacking_v2_validation.csv")
+        else:
+            stack_final = final_estimator_settings(best_settings)
+            print(f"Rebuilding the v1 stack (final estimator {stack_final}) and fitting it on the training split...")
+            stack_model = build_stack(best_settings, stack_final)
+            saved_row, saved_file, MODEL_FILE = "Stack", STACK_VALIDATION_FILE, Path("models/model_v1.joblib")
+        STACK_VALIDATION_FILE = saved_file
         seconds = fit_timed(stack_model, X_train, y_train)
         result, probability = evaluate(stack_model, X_val, y_val)
         print(f"Fitted in {seconds:.0f} s. Validation: accuracy {result['accuracy']:.4f}  macro F1 {result['macro_f1']:.4f}  "
               f"ROC-AUC {result['roc_auc']:.4f}  class 0 precision {result['precision_0']:.4f} recall {result['recall_0']:.4f}")
-        weights, intercept = stack_weights(stack_model)
-        print("Learned weights:", {k: round(float(v), 4) for k, v in weights.items()}, f"intercept {intercept:.4f}")
+        if hasattr(ft.get_stack(stack_model).final_estimator_, "coef_"):
+            weights, intercept = stack_weights(stack_model)
+            print("Learned weights:", {k: round(float(v), 4) for k, v in weights.items()}, f"intercept {intercept:.4f}")
         if STACK_VALIDATION_FILE.exists():
-            saved = pd.read_csv(STACK_VALIDATION_FILE).set_index("model").loc["Stack"]
+            saved = pd.read_csv(STACK_VALIDATION_FILE).set_index("model").loc[saved_row]
             print(f"Saved in {STACK_VALIDATION_FILE}: macro F1 {saved['macro_f1']:.4f}, ROC-AUC {saved['roc_auc']:.4f}  "
                   f"(difference {result['macro_f1'] - saved['macro_f1']:+.6f} and {result['roc_auc'] - saved['roc_auc']:+.6f})")
         if MODEL_FILE.exists():

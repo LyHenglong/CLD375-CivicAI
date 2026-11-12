@@ -1,11 +1,11 @@
 {
   "model_name": "CivicAI stacking classifier",
-  "model_version": "1.0",
+  "model_version": "2.0",
   "trained_on": "2026-11-12",
   "random_state": 42,
   "file": "models/model.joblib",
-  "sha256": "f96047169d3e737d29ed23ab85fc09bf2afced7e6c9463514993a4fb3f68d1b5",
-  "file_size_mb": 19.817,
+  "sha256": "d089972d2ec1747dee164b5424a2cb1b614098f41b04acd2a2e2fbdffaefea52",
+  "file_size_mb": 19.84,
   "versions": {
     "python": "3.10.10",
     "scikit-learn": "1.7.2",
@@ -27,7 +27,8 @@
     "0": "not resolved within 7 days",
     "threshold_days": 7,
     "predict_proba_column_1": "probability of class 1 (resolved within 7 days)",
-    "decision_threshold": 0.5
+    "decision_threshold": 0.61,
+    "decision_rule": "predicted class is 1 when the probability of class 1 is at or above decision_threshold; model.predict() already applies it"
   },
   "input_fields": [
     {
@@ -174,13 +175,16 @@
   ],
   "pipeline": {
     "step 1 clean": "RequestCleaner (src/features.py): the Phase 3 cleaning, rare categories to 'Other', time features",
-    "step 2 stack": "StackingClassifier over three base models, each with its own encoder",
+    "step 2 stack": "FixedThresholdClassifier (applies the cut-off) around a StackingClassifier; use src.features.get_stack(model) to reach the stack",
     "base_models": {
-      "XGBoost": {
+      "XGBoost (depth 8)": {
         "n_estimators": 600,
         "learning_rate": 0.05,
         "max_depth": 8,
         "scale_pos_weight": 0.4556
+      },
+      "Logistic Regression": {
+        "C": 0.3
       },
       "Bernoulli Naive Bayes": {
         "alpha": 0.1,
@@ -197,17 +201,17 @@
     "passthrough": false
   },
   "final_estimator": {
-    "type": "LogisticRegression",
-    "class_weight": "balanced",
+    "type": "logistic",
+    "class_weight": null,
     "C": 0.1,
-    "max_iter": 3000,
     "weights": {
-      "XGBoost": 4.378315,
-      "Bernoulli Naive Bayes": -1.267406,
-      "Random Forest": 5.082695
+      "XGBoost (depth 8)": 4.517318,
+      "Logistic Regression": 2.049577,
+      "Bernoulli Naive Bayes": -1.54122,
+      "Random Forest": 2.720559
     },
-    "intercept": -4.149698,
-    "chosen_by": "validation macro F1, grid in reports/stacking_tuning.csv"
+    "intercept": -2.409881,
+    "chosen_by": "Phase 6b: best of the experiments in reports/stacking_experiments.csv by validation macro F1; cut-off chosen on training out-of-fold predictions"
   },
   "split": {
     "train": {
@@ -226,5 +230,10 @@
       "to": "2026-08-31 23:59:06"
     }
   },
-  "fitted_on": "the training split only (not refitted on train + validation)"
+  "fitted_on": "the training split only (not refitted on train + validation)",
+  "previous_version": {
+    "model_version": "1.0",
+    "file": "models/model_v1.joblib (not in Git)",
+    "git_tag": "phase6-v1"
+  }
 }

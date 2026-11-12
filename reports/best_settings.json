@@ -29,5 +29,19 @@
   "Stacking final estimator": {
     "class_weight": "balanced",
     "C": 0.1
+  },
+  "Stack v2": {
+    "members": [
+      "xgboost",
+      "logistic_regression",
+      "naive_bayes",
+      "random_forest"
+    ],
+    "final": {
+      "type": "logistic",
+      "class_weight": null,
+      "C": 0.1
+    },
+    "threshold": 0.61
   }
 }

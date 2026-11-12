@@ -2,6 +2,10 @@
 
 Run from the project root:  python src/fetch_data.py
 
+A later period can be pulled the same way into its own files (used in Phase 6b
+for the forward test set), for example:
+    python src/fetch_data.py --start 2026-09-01 --end 2026-10-29 --name forward
+
 What it does
 1. Asks the API how many requests there are per status (saved to status_counts.csv).
 2. Downloads a 1-in-48 sample of the CLOSED requests, in 4 date windows per month.
@@ -12,6 +16,7 @@ What it does
 Nothing is cleaned here. Cleaning happens in Phase 3.
 """
 
+import argparse
 import io
 import os
 import time
@@ -35,6 +40,8 @@ RETRY_DELAY_SECONDS = 5
 # fair sample of every day and every hour, and it gives the same rows every run.
 SAMPLE_EVERY = 48
 SAMPLE_FILTER = f"unique_key::number % {SAMPLE_EVERY} = 0"
+
+MIN_ROWS = 150_000            # print a warning if the pull returns fewer rows than this
 
 RAW_DIR = Path("data/raw")
 PARTS_DIR = RAW_DIR / "parts"
@@ -72,7 +79,9 @@ def make_windows():
         starts = [month_start.replace(day=d) for d in WINDOW_START_DAYS]
         ends = starts[1:] + [next_month]
         for s, e in zip(starts, ends):
-            windows.append((s.strftime("%Y-%m-%d"), e.strftime("%Y-%m-%d")))
+            e = min(e, pd.Timestamp(END))          # a range may stop in the middle of a month
+            if s < e:
+                windows.append((s.strftime("%Y-%m-%d"), e.strftime("%Y-%m-%d")))
     return windows
 
 
@@ -159,11 +168,23 @@ def print_summary(raw):
     print(created.dt.to_period("M").value_counts().sort_index().to_string())
     print("\nNull count per column:")
     print(raw.isna().sum().to_string())
-    if len(raw) < 150_000:
-        print("\nWARNING: fewer than 150,000 rows. The pull is SHORT of the target.")
+    if len(raw) < MIN_ROWS:
+        print(f"\nWARNING: fewer than {MIN_ROWS:,} rows. The pull is SHORT of the target.")
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Pull a 1-in-48 sample of closed NYC 311 requests.")
+    parser.add_argument("--start", default=START, help="first created_date included (YYYY-MM-DD)")
+    parser.add_argument("--end", default=END, help="first created_date NOT included (YYYY-MM-DD)")
+    parser.add_argument("--name", default=None, help="save under this name instead of the main raw file")
+    parser.add_argument("--min-rows", type=int, default=MIN_ROWS, help="warn below this row count")
+    args = parser.parse_args()
+    START, END, MIN_ROWS = args.start, args.end, args.min_rows      # the functions above read these
+    if args.name:                                                   # keep the main raw files untouched
+        PARTS_DIR = RAW_DIR / f"parts_{args.name}"
+        RAW_FILE = RAW_DIR / f"nyc311_{args.name}_raw.parquet"
+        STATUS_FILE = RAW_DIR / f"status_counts_{args.name}.csv"
+
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     save_status_counts()
     download_pieces()

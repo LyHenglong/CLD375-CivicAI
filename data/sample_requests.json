@@ -1,5 +1,5 @@
 {
-  "description": "Raw requests in the format of the API (CLAUDE.md section 6), with the model's answer. valid_requests come from the VALIDATION split (the test split was not used); invalid_requests must be rejected by the API with the status shown.",
+  "description": "Raw requests in the format of the API (CLAUDE.md section 6), with the answers of the v2 model. valid_requests come from the VALIDATION split (no test split was used); the predicted class is 1 when the probability is at or above decision_threshold. invalid_requests must be rejected by the API with the status shown.",
   "label_meaning": {
     "1": "resolved within 7 days",
     "0": "not resolved within 7 days"
@@ -21,7 +21,7 @@
       },
       "true_label": 1,
       "expected_predicted_class": 1,
-      "expected_probability_within_threshold": 0.982435570655
+      "expected_probability_within_threshold": 0.995128090931
     },
     {
       "name": "validation_example_2",
@@ -39,7 +39,7 @@
       },
       "true_label": 1,
       "expected_predicted_class": 1,
-      "expected_probability_within_threshold": 0.982576734384
+      "expected_probability_within_threshold": 0.995162736034
     },
     {
       "name": "validation_example_3",
@@ -56,8 +56,8 @@
         "created_at": "2026-02-25T16:24:03"
       },
       "true_label": 1,
-      "expected_predicted_class": 0,
-      "expected_probability_within_threshold": 0.478781018637
+      "expected_predicted_class": 1,
+      "expected_probability_within_threshold": 0.846709627871
     },
     {
       "name": "validation_example_4",
@@ -75,7 +75,7 @@
       },
       "true_label": 0,
       "expected_predicted_class": 0,
-      "expected_probability_within_threshold": 0.123360283098
+      "expected_probability_within_threshold": 0.418025172859
     },
     {
       "name": "validation_example_5",
@@ -93,7 +93,7 @@
       },
       "true_label": 0,
       "expected_predicted_class": 0,
-      "expected_probability_within_threshold": 0.079072803738
+      "expected_probability_within_threshold": 0.300234052482
     }
   ],
   "invalid_requests": [
@@ -147,5 +147,6 @@
       "expected_status": 422,
       "expected_error_field": "latitude"
     }
-  ]
+  ],
+  "decision_threshold": 0.61
 }

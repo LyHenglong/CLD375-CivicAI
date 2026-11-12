@@ -202,6 +202,16 @@ def build_pipeline(model=None, features=None, binary=False):
     return Pipeline(steps)
 
 
+def get_stack(model):
+    """Return the StackingClassifier inside a saved pipeline.
+
+    In the v2 model the stack is wrapped in a FixedThresholdClassifier (which only
+    changes the cut-off used by predict), so the stack itself is one level down.
+    """
+    step = model["stack"]
+    return getattr(step, "estimator_", step)
+
+
 # ---------------------------------------------------------------- make the split files
 if __name__ == "__main__":
     clean = pd.read_parquet(pp.CLEAN_FILE)

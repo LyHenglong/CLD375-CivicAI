@@ -218,6 +218,23 @@ def make_clean_dataset(raw):
     return clean, values
 
 
+def clean_new_rows(raw, values):
+    """Clean rows pulled LATER (a forward test set) exactly like the original data.
+
+    Same steps as make_clean_dataset, except that nothing is learned from the new
+    rows: the category lists come from `values`, which were learned on the training split.
+    """
+    df = raw.drop_duplicates()
+    df = df.drop_duplicates(subset="unique_key")
+    df = convert_dates(df)
+    df = clean_features(df)
+    df = add_target(df)
+    df = drop_unusable_rows(df)
+    df = df.sort_values(["created_date", "unique_key"]).reset_index(drop=True)
+    df = apply_rare_categories(df, values)
+    return df[CLEAN_COLUMNS]
+
+
 if __name__ == "__main__":
     raw_table = pd.read_parquet(RAW_FILE)
     clean_table, learned = make_clean_dataset(raw_table)
