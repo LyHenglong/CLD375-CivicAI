@@ -20,10 +20,28 @@
     "actual1_pred1": 23069,
     "note": "optimistic: this model was picked as the best of several experiments on this split"
   },
-  "forward_test": "not scored yet (see section 8 of notebooks/05_stacking_improvement.ipynb)",
+  "forward_test": {
+    "requests": 12069,
+    "accuracy": 0.887812,
+    "precision_0": 0.607753,
+    "recall_0": 0.779262,
+    "f1_0": 0.682904,
+    "precision_1": 0.957291,
+    "recall_1": 0.907727,
+    "f1_1": 0.93185,
+    "macro_f1": 0.807377,
+    "roc_auc": 0.932739,
+    "actual0_pred0": 1458,
+    "actual0_pred1": 413,
+    "actual1_pred0": 941,
+    "actual1_pred1": 9257,
+    "note": "the clean test: closed requests created 2026-09-01 to 2026-10-28, scored once, never used to choose anything"
+  },
   "xgboost_alone": {
     "validation_macro_f1": 0.835118,
-    "validation_roc_auc": 0.94329
+    "validation_roc_auc": 0.94329,
+    "forward_test_macro_f1": 0.806968,
+    "forward_test_roc_auc": 0.933032
   },
   "file_size_mb": 19.84,
   "predict_one_request_ms": 138.4,
@@ -62,6 +80,64 @@
       "actual0_pred1": 662,
       "actual1_pred0": 3426,
       "actual1_pred1": 20937
+    },
+    "forward_test": {
+      "requests": 12069,
+      "accuracy": 0.849532,
+      "precision_0": 0.508281,
+      "recall_0": 0.902191,
+      "f1_0": 0.650231,
+      "precision_1": 0.979081,
+      "recall_1": 0.839871,
+      "f1_1": 0.904149,
+      "macro_f1": 0.77719,
+      "roc_auc": 0.933242,
+      "actual0_pred0": 1688,
+      "actual0_pred1": 183,
+      "actual1_pred0": 1633,
+      "actual1_pred1": 8565
     }
+  },
+  "forward_test_with_still_open_requests": {
+    "requests": 13093,
+    "accuracy": 0.878026,
+    "precision_0": 0.704088,
+    "recall_0": 0.773402,
+    "f1_0": 0.737119,
+    "precision_1": 0.933824,
+    "recall_1": 0.907727,
+    "f1_1": 0.920591,
+    "macro_f1": 0.828855,
+    "roc_auc": 0.929277,
+    "actual0_pred0": 2239,
+    "actual0_pred1": 656,
+    "actual1_pred0": 941,
+    "actual1_pred1": 9257,
+    "note": "sensitivity: the forward test plus the still-open requests of the same period, counted as class 0"
+  },
+  "original_test_reused_optimistic": {
+    "requests": 29831,
+    "accuracy": 0.889813,
+    "precision_0": 0.672302,
+    "recall_0": 0.778164,
+    "f1_0": 0.72137,
+    "precision_1": 0.948387,
+    "recall_1": 0.914871,
+    "f1_1": 0.931328,
+    "macro_f1": 0.826349,
+    "roc_auc": 0.936389,
+    "actual0_pred0": 4255,
+    "actual0_pred1": 1213,
+    "actual1_pred0": 2074,
+    "actual1_pred1": 22289,
+    "note": "NOT clean: this split was seen in Phase 6 before the stack was improved"
+  },
+  "validation_to_forward_gap_points": {
+    "accuracy": -1.497,
+    "precision_0": -7.987,
+    "recall_0": 0.814,
+    "f1_0": -4.408,
+    "macro_f1": -2.654,
+    "roc_auc": -1.064
   }
 }
