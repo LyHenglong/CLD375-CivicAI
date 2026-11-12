@@ -25,5 +25,9 @@
   "Bernoulli Naive Bayes": {
     "alpha": 0.1,
     "class_prior": null
+  },
+  "Stacking final estimator": {
+    "class_weight": "balanced",
+    "C": 0.1
   }
 }

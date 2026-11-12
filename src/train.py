@@ -1,10 +1,13 @@
-"""Model comparison code (Phase 5 and 5b).
+"""Model comparison and stacking code (Phases 5, 5b and 6).
 
-notebooks/03_model_comparison.ipynb calls these functions and explains the results.
-Every model is the clean/encode pipeline from src/features.py plus a classifier.
+notebooks/03_model_comparison.ipynb and notebooks/04_stacking.ipynb call these
+functions and explain the results.
 
-Re-check the validation table from the project root (uses reports/best_settings.json):
+Rebuild the final stacking model from the project root and check it against the
+saved results (this reads the train and validation splits only, never the test split):
     python -m src.train
+Print the Phase 5 table of the six candidates instead:
+    python -m src.train --candidates
 """
 
 import json
@@ -17,12 +20,13 @@ import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.dummy import DummyClassifier
-from sklearn.ensemble import ExtraTreesClassifier, RandomForestClassifier
+from sklearn.base import clone
+from sklearn.ensemble import ExtraTreesClassifier, RandomForestClassifier, StackingClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (accuracy_score, confusion_matrix, f1_score,
                              precision_recall_fscore_support, roc_auc_score)
 from sklearn.naive_bayes import BernoulliNB
-from sklearn.model_selection import TimeSeriesSplit, cross_validate
+from sklearn.model_selection import StratifiedKFold, TimeSeriesSplit, cross_val_predict, cross_validate
 from sklearn.pipeline import Pipeline
 from sklearn.tree import DecisionTreeClassifier
 from xgboost import XGBClassifier
@@ -33,6 +37,9 @@ SEED = 42
 CV_FOLDS = 5
 BEST_SETTINGS_FILE = Path("reports/best_settings.json")
 TUNING_FILE = Path("reports/tuning_results.csv")
+STACK_FINAL_KEY = "Stacking final estimator"        # its entry in best_settings.json
+STACK_VALIDATION_FILE = Path("reports/stacking_validation.csv")
+MODEL_FILE = Path("models/model.joblib")
 
 
 def load_xy(split, folder=ft.PROCESSED_DIR):
@@ -107,8 +114,8 @@ def default_settings(y_train):
     }
 
 
-def make_model(name, settings):
-    """Build the full pipeline (clean -> encode -> classifier) for one model.
+def make_classifier(name, settings):
+    """Build one classifier. Returns (classifier, needs_0_1_encoder).
 
     Every model handles the 17% minority class (class 0) in its own way:
     class weights, scale_pos_weight, or the class prior.
@@ -133,10 +140,26 @@ def make_model(name, settings):
         # It has no class weights. class_prior (in the settings) tells it how common to
         # assume each class is: [0.5, 0.5] = equally common, None = the real 17/83 shares.
         # It expects yes/no inputs, so it gets the encoder where every column is 0 or 1.
-        return ft.build_pipeline(BernoulliNB(**settings), binary=True)
+        return BernoulliNB(**settings), True
     else:
         raise ValueError(f"unknown model: {name}")
-    return ft.build_pipeline(classifier)
+    return classifier, False
+
+
+def make_model(name, settings):
+    """Build the full pipeline (clean -> encode -> classifier) for one model."""
+    classifier, binary = make_classifier(name, settings)
+    return ft.build_pipeline(classifier, binary=binary)
+
+
+def make_base_pipeline(name, settings):
+    """One base model of the stack: its own encoder plus the classifier.
+
+    It receives the CLEANED table (the stack's first step does the cleaning once).
+    """
+    classifier, binary = make_classifier(name, settings)
+    encoder = ft.build_binary_encoder() if binary else ft.build_encoder()
+    return Pipeline([("encode", encoder), ("model", classifier)])
 
 
 def settings_to_try(y_train):
@@ -230,9 +253,20 @@ def load_or_tune(name, settings_list, X, y, path=TUNING_FILE):
 
 # ---------------------------------------------------------------- evaluation
 def evaluate(model, X, y):
-    """All validation metrics for one fitted model. Returns (metrics, probabilities)."""
+    """All metrics for one fitted model. Returns (metrics, probabilities)."""
     predicted = model.predict(X)
     probability = model.predict_proba(X)[:, 1]
+    return score_table(y, predicted, probability), probability
+
+
+def evaluate_probability(y, probability):
+    """Same metrics from probabilities alone (class 1 when the probability is above 0.5)."""
+    probability = np.asarray(probability)
+    return score_table(y, (probability > 0.5).astype(int), probability)
+
+
+def score_table(y, predicted, probability):
+    """Accuracy, per-class precision/recall/F1, macro F1, ROC-AUC and confusion matrix counts."""
     precision, recall, f1, _ = precision_recall_fscore_support(y, predicted, labels=[0, 1], zero_division=0)
     tn, fp, fn, tp = confusion_matrix(y, predicted, labels=[0, 1]).ravel()
     metrics = {
@@ -244,7 +278,7 @@ def evaluate(model, X, y):
         # confusion matrix: "actual 0, predicted 0" and so on
         "actual0_pred0": int(tn), "actual0_pred1": int(fp), "actual1_pred0": int(fn), "actual1_pred1": int(tp),
     }
-    return metrics, probability
+    return metrics
 
 
 def fit_timed(model, X, y):
@@ -286,11 +320,107 @@ def importance_by_feature(model):
     return importance.groupby(owner).sum().sort_values(ascending=False)
 
 
+# ---------------------------------------------------------------- stacking (Phase 6)
+# The three base models of the stack (chosen in Phase 5b). The key is the name inside the stack.
+STACK_MODELS = {"xgboost": "XGBoost", "naive_bayes": "Bernoulli Naive Bayes", "random_forest": "Random Forest"}
+FINAL_ESTIMATOR_GRID = {"class_weight": [None, "balanced"], "C": [0.1, 1.0, 10.0]}
+
+
+def stack_folds():
+    """5-fold stratified cross-validation used INSIDE the stack.
+
+    StackingClassifier needs an out-of-fold prediction for every training row, which
+    TimeSeriesSplit cannot give (it never validates on the first block). So the folds
+    here are shuffled. This is a small, known compromise and only touches the training
+    split: the validation and test splits stay in the future of every training row.
+    """
+    return StratifiedKFold(n_splits=5, shuffle=True, random_state=SEED)
+
+
+def make_final_estimator(settings):
+    """The meta-model: Logistic Regression on the base models' probabilities."""
+    return LogisticRegression(class_weight=settings["class_weight"], C=settings["C"],
+                              max_iter=3000, random_state=SEED)
+
+
+def build_stack(best_settings, final_settings):
+    """The deployable model: one Pipeline from RAW request fields to a probability.
+
+    step "clean": the shared RequestCleaner (cleaning, rare categories, time features)
+    step "stack": a StackingClassifier over the three base models
+    """
+    estimators = [(key, make_base_pipeline(name, best_settings[name])) for key, name in STACK_MODELS.items()]
+    stack = StackingClassifier(estimators=estimators, final_estimator=make_final_estimator(final_settings),
+                               cv=stack_folds(), stack_method="predict_proba", passthrough=False)
+    return Pipeline([("clean", ft.RequestCleaner(features=list(ft.FINAL_FEATURES))), ("stack", stack)])
+
+
+def out_of_fold_probabilities(best_settings, X_clean, y):
+    """For each base model: its probability of class 1 for every training row, from a model
+    that did not see that row. This is exactly what the stack trains its meta-model on."""
+    columns = {}
+    for key, name in STACK_MODELS.items():
+        pipeline = make_base_pipeline(name, best_settings[name])
+        columns[key] = cross_val_predict(pipeline, X_clean, y, cv=stack_folds(), method="predict_proba")[:, 1]
+    return pd.DataFrame(columns)
+
+
+def tune_final_estimator(oof_train, y_train, base_valid, y_valid):
+    """Try every setting of the final estimator in FINAL_ESTIMATOR_GRID.
+
+    Fitted on the out-of-fold probabilities of the training split, scored on the validation split.
+    Best first (validation macro F1, then ROC-AUC).
+    """
+    rows = []
+    for class_weight in FINAL_ESTIMATOR_GRID["class_weight"]:
+        for c in FINAL_ESTIMATOR_GRID["C"]:
+            meta = make_final_estimator({"class_weight": class_weight, "C": c}).fit(oof_train, y_train)
+            row = {"class_weight": "none" if class_weight is None else class_weight, "C": c}
+            row.update(evaluate_probability(y_valid, meta.predict_proba(base_valid)[:, 1]))
+            row.update({f"weight_{key}": w for key, w in zip(STACK_MODELS, meta.coef_[0])})
+            row["intercept"] = float(meta.intercept_[0])
+            rows.append(row)
+    return pd.DataFrame(rows).sort_values(["macro_f1", "roc_auc"], ascending=False).reset_index(drop=True)
+
+
+def stack_weights(pipeline):
+    """What the meta-model learned: one weight per base model (applied to its probability)."""
+    meta = pipeline["stack"].final_estimator_
+    weights = pd.Series(meta.coef_[0], index=list(STACK_MODELS))
+    return weights, float(meta.intercept_[0])
+
+
+def final_estimator_settings(best_settings):
+    """The chosen final-estimator setting, from best_settings.json (null = no class weight)."""
+    return best_settings[STACK_FINAL_KEY]
+
+
 # ---------------------------------------------------------------- re-check
 if __name__ == "__main__":
+    import sys
+
     X_train, y_train = load_xy("train")
-    X_val, y_val = load_xy("val")                    # the test split is not used here
+    X_val, y_val = load_xy("val")                    # the test split is never read here
     best_settings = json.loads(BEST_SETTINGS_FILE.read_text(encoding="utf-8"))
+    if "--candidates" not in sys.argv:
+        stack_final = final_estimator_settings(best_settings)
+        print(f"Rebuilding the stack (final estimator {stack_final}) and fitting it on the training split...")
+        stack_model = build_stack(best_settings, stack_final)
+        seconds = fit_timed(stack_model, X_train, y_train)
+        result, probability = evaluate(stack_model, X_val, y_val)
+        print(f"Fitted in {seconds:.0f} s. Validation: accuracy {result['accuracy']:.4f}  macro F1 {result['macro_f1']:.4f}  "
+              f"ROC-AUC {result['roc_auc']:.4f}  class 0 precision {result['precision_0']:.4f} recall {result['recall_0']:.4f}")
+        weights, intercept = stack_weights(stack_model)
+        print("Learned weights:", {k: round(float(v), 4) for k, v in weights.items()}, f"intercept {intercept:.4f}")
+        if STACK_VALIDATION_FILE.exists():
+            saved = pd.read_csv(STACK_VALIDATION_FILE).set_index("model").loc["Stack"]
+            print(f"Saved in {STACK_VALIDATION_FILE}: macro F1 {saved['macro_f1']:.4f}, ROC-AUC {saved['roc_auc']:.4f}  "
+                  f"(difference {result['macro_f1'] - saved['macro_f1']:+.6f} and {result['roc_auc'] - saved['roc_auc']:+.6f})")
+        if MODEL_FILE.exists():
+            saved_model = joblib.load(MODEL_FILE)
+            difference = np.abs(saved_model.predict_proba(X_val)[:, 1] - probability).max()
+            print(f"Largest difference in validation probabilities against {MODEL_FILE}: {difference:.2e}")
+        raise SystemExit(0)
     pipelines = make_baselines()
     pipelines.update({name: make_model(name, best_settings[name]) for name in CANDIDATES})
     print(f"{'model':32s} accuracy  prec_0  recall_0  f1_0    macro_f1  roc_auc  seconds")
