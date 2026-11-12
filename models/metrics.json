@@ -1,0 +1,55 @@
+{
+  "model": "CivicAI stacking classifier (XGBoost + Bernoulli Naive Bayes + Random Forest, Logistic Regression final estimator)",
+  "decision_threshold": 0.5,
+  "class_0_meaning": "not resolved within 7 days (the class staff want to flag)",
+  "validation": {
+    "requests": 29830,
+    "accuracy": 0.889641,
+    "precision_0": 0.623328,
+    "recall_0": 0.865588,
+    "f1_0": 0.724749,
+    "precision_1": 0.970582,
+    "recall_1": 0.894493,
+    "f1_1": 0.930985,
+    "macro_f1": 0.827867,
+    "roc_auc": 0.942936,
+    "actual0_pred0": 4334,
+    "actual0_pred1": 673,
+    "actual1_pred0": 2619,
+    "actual1_pred1": 22204
+  },
+  "test": {
+    "requests": 29831,
+    "accuracy": 0.862961,
+    "precision_0": 0.583819,
+    "recall_0": 0.878932,
+    "f1_0": 0.701606,
+    "precision_1": 0.96935,
+    "recall_1": 0.859377,
+    "f1_1": 0.911057,
+    "macro_f1": 0.806331,
+    "roc_auc": 0.935957,
+    "actual0_pred0": 4806,
+    "actual0_pred1": 662,
+    "actual1_pred0": 3426,
+    "actual1_pred1": 20937
+  },
+  "validation_to_test_gap_points": {
+    "accuracy": -2.668,
+    "precision_0": -3.951,
+    "recall_0": 1.334,
+    "f1_0": -2.314,
+    "macro_f1": -2.154,
+    "roc_auc": -0.698
+  },
+  "xgboost_alone": {
+    "validation_macro_f1": 0.835118,
+    "test_macro_f1": 0.825756,
+    "validation_roc_auc": 0.94329,
+    "test_roc_auc": 0.936858
+  },
+  "file_size_mb": 19.817,
+  "predict_one_request_ms": 107.8,
+  "predict_one_request_ms_random_forest_one_thread": 79.8,
+  "predict_one_request_note": "median of 60 calls on the development laptop, model only (no web server), one raw request dict. The second figure sets the Random Forest to n_jobs=1 after loading, which gives identical answers."
+}

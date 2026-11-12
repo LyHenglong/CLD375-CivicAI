@@ -14,5 +14,8 @@ models/*
 !models/.gitkeep
 # small text file of cleaning values, needed by the API (not a model file)
 !models/cleaning_values.json
+# small text files that describe the model (no secrets): needed by the API and the report
+!models/model_meta.json
+!models/metrics.json
 !data/raw/.gitkeep
 !data/processed/.gitkeep

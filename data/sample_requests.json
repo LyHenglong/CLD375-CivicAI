@@ -1,0 +1,151 @@
+{
+  "description": "Raw requests in the format of the API (CLAUDE.md section 6), with the model's answer. valid_requests come from the VALIDATION split (the test split was not used); invalid_requests must be rejected by the API with the status shown.",
+  "label_meaning": {
+    "1": "resolved within 7 days",
+    "0": "not resolved within 7 days"
+  },
+  "valid_requests": [
+    {
+      "name": "validation_example_1",
+      "source": "validation split, unique_key 67304544",
+      "request": {
+        "complaint_type": "Blocked Driveway",
+        "descriptor": "No Access",
+        "location_type": "Street/Sidewalk",
+        "borough": "STATEN ISLAND",
+        "incident_zip": "10306",
+        "open_data_channel_type": "PHONE",
+        "latitude": 40.561436,
+        "longitude": -74.133752,
+        "created_at": "2025-12-26T05:06:07"
+      },
+      "true_label": 1,
+      "expected_predicted_class": 1,
+      "expected_probability_within_threshold": 0.982435570655
+    },
+    {
+      "name": "validation_example_2",
+      "source": "validation split, unique_key 68492352",
+      "request": {
+        "complaint_type": "Illegal Parking",
+        "descriptor": "Blocked Hydrant",
+        "location_type": "Street/Sidewalk",
+        "borough": "QUEENS",
+        "incident_zip": "11372",
+        "open_data_channel_type": "ONLINE",
+        "latitude": 40.751919,
+        "longitude": -73.890401,
+        "created_at": "2026-03-29T11:12:40"
+      },
+      "true_label": 1,
+      "expected_predicted_class": 1,
+      "expected_probability_within_threshold": 0.982576734384
+    },
+    {
+      "name": "validation_example_3",
+      "source": "validation split, unique_key 68127072",
+      "request": {
+        "complaint_type": "Snow or Ice",
+        "descriptor": "Roadway",
+        "location_type": "Street",
+        "borough": "BROOKLYN",
+        "incident_zip": "11228",
+        "open_data_channel_type": "ONLINE",
+        "latitude": null,
+        "longitude": null,
+        "created_at": "2026-02-25T16:24:03"
+      },
+      "true_label": 1,
+      "expected_predicted_class": 0,
+      "expected_probability_within_threshold": 0.478781018637
+    },
+    {
+      "name": "validation_example_4",
+      "source": "validation split, unique_key 67232976",
+      "request": {
+        "complaint_type": "UNSANITARY CONDITION",
+        "descriptor": "MOLD",
+        "location_type": "RESIDENTIAL BUILDING",
+        "borough": "BRONX",
+        "incident_zip": "10475",
+        "open_data_channel_type": "PHONE",
+        "latitude": 40.875189,
+        "longitude": -73.828991,
+        "created_at": "2025-12-18T14:05:48"
+      },
+      "true_label": 0,
+      "expected_predicted_class": 0,
+      "expected_probability_within_threshold": 0.123360283098
+    },
+    {
+      "name": "validation_example_5",
+      "source": "validation split, unique_key 67395888",
+      "request": {
+        "complaint_type": "PLUMBING",
+        "descriptor": "TOILET",
+        "location_type": "RESIDENTIAL BUILDING",
+        "borough": "BROOKLYN",
+        "incident_zip": "11210",
+        "open_data_channel_type": "PHONE",
+        "latitude": 40.636592,
+        "longitude": -73.942921,
+        "created_at": "2026-01-05T12:02:53"
+      },
+      "true_label": 0,
+      "expected_predicted_class": 0,
+      "expected_probability_within_threshold": 0.079072803738
+    }
+  ],
+  "invalid_requests": [
+    {
+      "name": "missing_required_field",
+      "reason": "borough is required and is missing",
+      "request": {
+        "complaint_type": "Blocked Driveway",
+        "descriptor": "No Access",
+        "location_type": "Street/Sidewalk",
+        "incident_zip": "10306",
+        "open_data_channel_type": "PHONE",
+        "latitude": 40.561436,
+        "longitude": -74.133752,
+        "created_at": "2025-12-26T05:06:07"
+      },
+      "expected_status": 422,
+      "expected_error_field": "borough"
+    },
+    {
+      "name": "wrong_type",
+      "reason": "latitude must be a number but is text",
+      "request": {
+        "complaint_type": "Illegal Parking",
+        "descriptor": "Blocked Hydrant",
+        "location_type": "Street/Sidewalk",
+        "borough": "QUEENS",
+        "incident_zip": "11372",
+        "open_data_channel_type": "ONLINE",
+        "latitude": "north of the park",
+        "longitude": -73.890401,
+        "created_at": "2026-03-29T11:12:40"
+      },
+      "expected_status": 422,
+      "expected_error_field": "latitude"
+    },
+    {
+      "name": "impossible_coordinate",
+      "reason": "a latitude cannot be 140.7 (latitudes run from -90 to 90; New York is about 40.7)",
+      "request": {
+        "complaint_type": "Blocked Driveway",
+        "descriptor": "No Access",
+        "location_type": "Street/Sidewalk",
+        "borough": "STATEN ISLAND",
+        "incident_zip": "10306",
+        "open_data_channel_type": "PHONE",
+        "latitude": 140.7,
+        "longitude": -74.133752,
+        "created_at": "2025-12-26T05:06:07"
+      },
+      "expected_status": 422,
+      "expected_error_field": "latitude"
+    }
+  ]
+}

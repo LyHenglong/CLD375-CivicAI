@@ -1,0 +1,230 @@
+{
+  "model_name": "CivicAI stacking classifier",
+  "model_version": "1.0",
+  "trained_on": "2026-11-12",
+  "random_state": 42,
+  "file": "models/model.joblib",
+  "sha256": "f96047169d3e737d29ed23ab85fc09bf2afced7e6c9463514993a4fb3f68d1b5",
+  "file_size_mb": 19.817,
+  "versions": {
+    "python": "3.10.10",
+    "scikit-learn": "1.7.2",
+    "xgboost": "3.2.0",
+    "pandas": "2.3.3",
+    "numpy": "2.2.6",
+    "joblib": "1.6.0"
+  },
+  "requires_on_server": [
+    "src/__init__.py",
+    "src/preprocessing.py",
+    "src/features.py",
+    "models/model.joblib",
+    "models/model_meta.json"
+  ],
+  "start_from": "the project root, so that the package 'src' can be imported",
+  "label": {
+    "1": "resolved within 7 days",
+    "0": "not resolved within 7 days",
+    "threshold_days": 7,
+    "predict_proba_column_1": "probability of class 1 (resolved within 7 days)",
+    "decision_threshold": 0.5
+  },
+  "input_fields": [
+    {
+      "name": "complaint_type",
+      "type": "string",
+      "required": true,
+      "description": "Kind of request, as in the NYC 311 data. Any case or spacing is accepted. A type the model has never seen is treated as 'Other'.",
+      "example": "Noise - Residential",
+      "known_values_count": 103
+    },
+    {
+      "name": "borough",
+      "type": "string",
+      "required": true,
+      "description": "One of the five boroughs. Any case is accepted; anything else is treated as 'Unknown'.",
+      "example": "BROOKLYN",
+      "known_values_count": 5,
+      "known_values": [
+        "BRONX",
+        "BROOKLYN",
+        "MANHATTAN",
+        "QUEENS",
+        "STATEN ISLAND"
+      ]
+    },
+    {
+      "name": "open_data_channel_type",
+      "type": "string",
+      "required": true,
+      "description": "How the request was filed.",
+      "example": "PHONE",
+      "known_values_count": 4,
+      "known_values": [
+        "MOBILE",
+        "ONLINE",
+        "PHONE",
+        "Unknown"
+      ]
+    },
+    {
+      "name": "created_at",
+      "type": "string (ISO 8601 date and time, no time zone needed)",
+      "required": true,
+      "description": "When the request was filed. The server derives hour, weekday, month and the weekend flag from it.",
+      "example": "2026-11-09T22:15:00"
+    },
+    {
+      "name": "descriptor",
+      "type": "string",
+      "required": false,
+      "description": "More detail about the complaint. Missing becomes 'Unknown'; unseen text becomes 'Other'.",
+      "example": "Loud Music/Party",
+      "known_values_count": 231
+    },
+    {
+      "name": "location_type",
+      "type": "string",
+      "required": false,
+      "description": "Kind of place. Missing becomes 'Unknown'; unseen text becomes 'Other'.",
+      "example": "Residential Building/House",
+      "known_values_count": 34,
+      "known_values": [
+        "1-2 FAMILY DWELLING",
+        "3+ FAMILY APARTMENT BUILDING",
+        "3+ FAMILY APT. BUILDING",
+        "3+ FAMILY MIXED USE BUILDING",
+        "ABOVE ADDRESS",
+        "BUS STOP SHELTER",
+        "BUSINESS",
+        "CLUB/BAR/RESTAURANT",
+        "COMERCIAL",
+        "COMMERCIAL BUILDING",
+        "CURB",
+        "HIGHWAY",
+        "HOUSE OF WORSHIP",
+        "LOT",
+        "MIXED USE",
+        "MOBILE FOOD VENDOR",
+        "OTHER (EXPLAIN BELOW)",
+        "Other",
+        "PARK",
+        "PARK/PLAYGROUND",
+        "RESIDENTIAL",
+        "RESIDENTIAL BUILDING",
+        "RESIDENTIAL BUILDING/HOUSE",
+        "RESTAURANT/BAR/DELI/BAKERY",
+        "SCHOOL",
+        "SIDEWALK",
+        "STORE/COMMERCIAL",
+        "STREET",
+        "STREET/CURBSIDE",
+        "STREET/SIDEWALK",
+        "SUBWAY",
+        "TAXI",
+        "Unknown",
+        "YARD"
+      ]
+    },
+    {
+      "name": "incident_zip",
+      "type": "string",
+      "required": false,
+      "description": "5-digit New York ZIP code, as text. An invalid ZIP becomes 'Unknown'; a ZIP not among the common ones becomes 'Other'.",
+      "example": "11201",
+      "known_values_count": 176
+    },
+    {
+      "name": "latitude",
+      "type": "number",
+      "required": false,
+      "description": "Missing is allowed. Phase 7 should reject values that are impossible (outside -90..90) with HTTP 422; values inside that range but outside the New York box below are treated as missing by the cleaning step.",
+      "valid_range_new_york": [
+        40.47,
+        40.93
+      ],
+      "example": 40.69
+    },
+    {
+      "name": "longitude",
+      "type": "number",
+      "required": false,
+      "description": "Missing is allowed; same rules as latitude (impossible means outside -180..180). If only one of latitude and longitude is given, both are treated as missing.",
+      "valid_range_new_york": [
+        -74.27,
+        -73.68
+      ],
+      "example": -73.99
+    }
+  ],
+  "input_fields_note": "The API receives 9 raw fields. The model uses 12 features: 8 of these fields plus hour, weekday, month and is_weekend, which are derived from created_at.",
+  "model_features": [
+    "complaint_type",
+    "descriptor",
+    "location_type",
+    "borough",
+    "incident_zip",
+    "open_data_channel_type",
+    "latitude",
+    "longitude",
+    "hour",
+    "weekday",
+    "month",
+    "is_weekend"
+  ],
+  "pipeline": {
+    "step 1 clean": "RequestCleaner (src/features.py): the Phase 3 cleaning, rare categories to 'Other', time features",
+    "step 2 stack": "StackingClassifier over three base models, each with its own encoder",
+    "base_models": {
+      "XGBoost": {
+        "n_estimators": 600,
+        "learning_rate": 0.05,
+        "max_depth": 8,
+        "scale_pos_weight": 0.4556
+      },
+      "Bernoulli Naive Bayes": {
+        "alpha": 0.1,
+        "class_prior": null
+      },
+      "Random Forest": {
+        "n_estimators": 150,
+        "max_depth": 40,
+        "min_samples_leaf": 5
+      }
+    },
+    "stack_cv": "StratifiedKFold(n_splits=5, shuffle=True, random_state=42), inside the training split only",
+    "stack_method": "predict_proba",
+    "passthrough": false
+  },
+  "final_estimator": {
+    "type": "LogisticRegression",
+    "class_weight": "balanced",
+    "C": 0.1,
+    "max_iter": 3000,
+    "weights": {
+      "XGBoost": 4.378315,
+      "Bernoulli Naive Bayes": -1.267406,
+      "Random Forest": 5.082695
+    },
+    "intercept": -4.149698,
+    "chosen_by": "validation macro F1, grid in reports/stacking_tuning.csv"
+  },
+  "split": {
+    "train": {
+      "rows": 139206,
+      "from": "2024-01-01 00:00:00",
+      "to": "2025-12-02 20:45:49"
+    },
+    "validation": {
+      "rows": 29830,
+      "from": "2025-12-02 20:48:18",
+      "to": "2026-04-14 21:10:06"
+    },
+    "test": {
+      "rows": 29831,
+      "from": "2026-04-14 21:11:23",
+      "to": "2026-08-31 23:59:06"
+    }
+  },
+  "fitted_on": "the training split only (not refitted on train + validation)"
+}

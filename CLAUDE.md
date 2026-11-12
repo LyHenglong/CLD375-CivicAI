@@ -70,7 +70,9 @@ These decisions are fixed unless the student changes them.
 | Selected for the stack | **XGBoost, Bernoulli Naive Bayes and Random Forest** (Phase 5b). Rule: rank by mean cross-validated macro F1 on the training split and take the top 3, but skip a model whose validation probability correlation with an already chosen model is above 0.97. Logistic Regression ranked second but was skipped (0.975 with XGBoost). Best single model: XGBoost (validation macro F1 0.835, ROC-AUC 0.943) |
 | Meta-classifier | `StackingClassifier` over the three selected models (XGBoost, Bernoulli Naive Bayes, Random Forest), final estimator Logistic Regression, `cv=5`, probability outputs. Bernoulli Naive Bayes needs the all-0/1 encoder (`build_binary_encoder` in `src/features.py`), so each base model carries its own encoder after the shared cleaning step |
 | Metrics | Accuracy, precision, recall, macro F1, ROC-AUC, confusion matrix |
-| Saved artifact | One scikit-learn `Pipeline` (preprocessing plus stack) saved with `joblib` as `models/model.joblib` |
+| Saved artifact | One scikit-learn `Pipeline` (`clean` step plus the stack) saved with `joblib` as `models/model.joblib`. It takes the RAW API fields and returns a probability. **`models/model.joblib` is gitignored: copy it to EC2 with `scp`.** `models/model_meta.json` (SHA-256, library versions, the 9 raw input fields, split dates, final-estimator settings) and `models/metrics.json` are small text files and are committed |
+| Final model (Phase 6) | Pipeline(`clean` = `RequestCleaner`, `stack` = `StackingClassifier` over XGBoost, Bernoulli Naive Bayes and Random Forest with their tuned settings from `reports/best_settings.json`; final estimator Logistic Regression `class_weight="balanced"`, `C=0.1`, chosen by validation macro F1; 5-fold stratified shuffled CV inside the training split, because `StackingClassifier` cannot use `TimeSeriesSplit`). Fitted on the training split only, not refitted on train+validation. 19.8 MB (Random Forest 17.95 MB). Stack validation: macro F1 0.828, ROC-AUC 0.943. Stack test (scored once): macro F1 0.806, ROC-AUC 0.936, class 0 recall 0.879, class 0 precision 0.584. **The stack did not beat XGBoost alone** (test macro F1 0.826, ROC-AUC 0.937); it is deployed because the course requires a meta-classifier. Do not score the test split again |
+| Model input fields | 9 raw fields, not 12: required `complaint_type`, `borough`, `open_data_channel_type`, `created_at`; optional `descriptor`, `location_type`, `incident_zip`, `latitude`, `longitude`. The model's 12 features include hour, weekday, month and `is_weekend`, which the pipeline derives from `created_at`. Full list with rules in `models/model_meta.json` |
 | Backend | FastAPI with Uvicorn on Ubuntu EC2 |
 | Python | 3.10 or newer; record exact versions in `models/model_meta.json` |
 
@@ -87,22 +89,24 @@ civicai-ec2/
   data/
     raw/                  # unchanged API pull
     processed/            # cleaned data and splits
-    sample_requests.json  # example API inputs
+    sample_requests.json  # 5 real validation-split requests with the model's answers, and 3 invalid ones with the expected 422
   notebooks/
     01_data_cleaning_eda.ipynb
     02_feature_selection.ipynb
     03_model_comparison.ipynb
-    04_stacking_meta_classifier.ipynb
+    04_stacking.ipynb
   src/
     fetch_data.py
     preprocessing.py
     features.py
     train.py
-    evaluate.py
+    evaluate.py           # not created: evaluation functions live in train.py
+    check_saved_model.py  # fresh-process check of models/model.joblib (not needed by the API)
   models/
-    model.joblib
+    model.joblib          # gitignored; copy to EC2 with scp
     metrics.json
     model_meta.json
+    cleaning_values.json  # not needed on the server
   reports/
     figures/
     summary.md
@@ -132,7 +136,7 @@ Do the phases in order. Each phase ends with its acceptance check, a short summa
 | 3. Cleaning and EDA | Nov 12-14 | In notebook 01, check and handle missing values, duplicates by `unique_key`, outliers, inconsistent text, wrong types; save every chart to `reports/figures/`; keep a cleaning log table | Each issue has a check, a chart and a stated fix; `data/processed/clean.parquet` saved |
 | 4. Features and pipeline | Nov 15-16 | Write `src/features.py` and `src/preprocessing.py`; derive hour, weekday, month, weekend flag; build a `ColumnTransformer` in a `Pipeline`; make the chronological split; rank relevance in notebook 02 with mutual information and tree importance | Pipeline fits on train only; split date ranges printed; an assert confirms no excluded column is in the inputs; kept and dropped features listed with reasons |
 | 5. Model comparison | Nov 17-18 | In notebook 03 and `src/train.py`, train the two baselines and six candidate models (Logistic Regression, Decision Tree, Random Forest, Extra Trees, XGBoost, Bernoulli Naive Bayes), cross-validate on train with `TimeSeriesSplit(5)`, tune lightly, score on validation, save `reports/model_comparison.csv`, ROC curves and confusion matrices, and select 3 models for the stack with the rule in Section 3 | One table compares all models on the same split; best single model named with the metric used; the 3 selected models marked in `selected_for_stack` (done: XGBoost, Bernoulli Naive Bayes, Random Forest) |
-| 6. Stacking | Nov 18-19 | In notebook 04, build the `StackingClassifier`, compare it with each base model, score the test set once, save `models/model.joblib`, `metrics.json` and `model_meta.json` | Stack versus base models table done; the saved pipeline loads in a fresh Python process and predicts one example |
+| 6. Stacking | Nov 18-19 | In notebook 04 and `src/train.py` (`build_stack`; `python -m src.train` rebuilds it and checks it against the saved results without reading the test split), build the `StackingClassifier`, compare it with each base model, score the test set once, save `models/model.joblib`, `metrics.json` and `model_meta.json`, and `data/sample_requests.json` | Stack versus base models table done (`reports/stacking_validation.csv`, `reports/test_results.csv`); the saved pipeline loads in a fresh Python process and predicts the sample requests (`src/check_saved_model.py`). Done: the stack did not beat XGBoost alone, and is deployed anyway |
 | 7. API | Nov 20-21 | Build the FastAPI app as specified in Section 6 and the tests in `tests/test_api.py` | `pytest` passes; `uvicorn app.main:app` runs locally; `/docs` shows the routes |
 | 8. Deployment files | Nov 21-22 | Write `deploy/civicai.service` and `deploy/ec2_setup.md` (Section 7); the student runs them on EC2 | The student reports that `GET /health` works at the public address |
 | 9. End-to-end tests | Nov 23-24 | Make `tests/test_api.py` run against a remote URL from the `API_URL` environment variable; add a Postman collection under `docs/`; list the screenshots the student must capture | Valid and invalid requests behave as in Section 6 against the live EC2 API |
@@ -180,7 +184,8 @@ The API accepts a request's raw fields, derives hour, weekday, month and weekend
 
 - Define the input with a Pydantic model in `app/schemas.py`. Required fields: `complaint_type`, `borough`, `open_data_channel_type`, `created_at`. The others are optional and default to "Unknown" or missing.
 - Check ranges: latitude and longitude must be plausible numbers, and `created_at` must be a valid ISO date and time.
-- Load `models/model.joblib` once at startup in `app/predictor.py`, not on every request.
+- Load `models/model.joblib` once at startup in `app/predictor.py`, not on every request. Right after loading, set the Random Forest inside the stack to one thread: `model["stack"].named_estimators_["random_forest"]["model"].n_jobs = 1`. Answers are identical and one prediction is faster (about 60-80 ms instead of 90-110 ms on the development laptop). The pipeline needs the `src` package on the import path, so start the server from the project root.
+- **The model does not validate input.** The three invalid requests in `data/sample_requests.json` (missing `borough`, text in `latitude`, `latitude` 140.7) still receive a probability if sent to the model directly. The Pydantic model must reject them with 422 and name the field. Use the valid requests in the same file as test cases: their probabilities must equal `expected_probability_within_threshold`.
 - Missing or invalid fields return 422 with the field named. A category the model never saw still returns a prediction, because the encoder ignores unknown values.
 - If the model fails to load, `/health` and `/predict` return 503 with a clear message. Never return a Python stack trace to the client.
 - Log each request and prediction to a local file for later review.
@@ -194,8 +199,8 @@ You write the files and the step-by-step commands. The student runs them on thei
 1. Launch an Ubuntu EC2 instance. Start small, and check the model file size and memory use before choosing. Check current pricing and free-tier terms first.
 2. Create a key pair and a security group: SSH only from the student's IP, and one TCP port for the API (8000).
 3. Connect over SSH and install `python3-venv` and `python3-pip`.
-4. Copy `app/`, `src/__init__.py`, `src/preprocessing.py`, `src/features.py`, `models/model.joblib`, `models/model_meta.json` and `requirements.txt` to the server with `scp`, keeping the same folder layout. The saved pipeline needs the three `src/` files to load. `models/cleaning_values.json` is not needed on the server.
-5. Create a virtual environment on the server and install the pinned requirements. The scikit-learn version must match `model_meta.json`.
+4. Copy `app/`, `src/__init__.py`, `src/preprocessing.py`, `src/features.py`, `models/model.joblib`, `models/model_meta.json` and `requirements.txt` to the server with `scp`, keeping the same folder layout. The saved pipeline needs the three `src/` files to load. `models/cleaning_values.json` is not needed on the server. `models/model.joblib` is not in Git, so it must be copied with `scp` (about 20 MB). To check the copy on the server, also copy `src/check_saved_model.py` and `data/sample_requests.json` and run `python -I src/check_saved_model.py` from the project root; it verifies the SHA-256 and the library versions in `model_meta.json` and the five sample probabilities.
+5. Create a virtual environment on the server and install the pinned requirements. The scikit-learn version (1.7.2) must match `model_meta.json`; use the same xgboost, pandas, numpy and joblib versions too.
 6. Test by running `uvicorn app.main:app --host 0.0.0.0 --port 8000` from the project root (so that `src` can be imported), then call `GET /health` from the student's laptop using the instance's public address.
 7. Install the `systemd` service below so the API restarts and survives closing the terminal.
 8. Stop the instance when not testing. Its public address changes after a stop and start unless an Elastic IP is attached, so update `API_URL` each time.
