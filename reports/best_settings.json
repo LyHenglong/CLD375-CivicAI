@@ -12,5 +12,18 @@
     "learning_rate": 0.05,
     "max_depth": 8,
     "scale_pos_weight": 0.4556
+  },
+  "Decision Tree": {
+    "max_depth": 40,
+    "min_samples_leaf": 20
+  },
+  "Extra Trees": {
+    "n_estimators": 100,
+    "max_depth": 40,
+    "min_samples_leaf": 5
+  },
+  "Bernoulli Naive Bayes": {
+    "alpha": 0.1,
+    "class_prior": null
   }
 }

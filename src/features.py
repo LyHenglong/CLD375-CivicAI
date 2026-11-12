@@ -22,7 +22,7 @@ from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.preprocessing import KBinsDiscretizer, OneHotEncoder, StandardScaler
 
 from src import preprocessing as pp
 
@@ -139,6 +139,33 @@ class RequestCleaner(BaseEstimator, TransformerMixin):
 
 
 # ---------------------------------------------------------------- pipeline step 2
+def build_binary_encoder(features=None):
+    """Like build_encoder, but every output column is 0 or 1.
+
+    Used for Bernoulli Naive Bayes, which expects yes/no features:
+    - text columns: one 0/1 column per category (as before);
+    - time features: one 0/1 column per hour, per weekday, per month and for the weekend flag;
+    - latitude and longitude: missing values filled with the training median, then each
+      cut into 10 bands holding equal numbers of training rows, one 0/1 column per band.
+    """
+    features = features or FINAL_FEATURES
+    assert_no_excluded(features)
+    categorical = [f for f in features if f in CATEGORICAL_CANDIDATES]
+    coordinates = [f for f in features if f in COORDINATE_FEATURES]
+    time = [f for f in features if f in TIME_FEATURES]
+
+    steps = []
+    if categorical:
+        steps.append(("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=True), categorical))
+    if coordinates:
+        bands = KBinsDiscretizer(n_bins=10, encode="onehot", strategy="quantile",
+                                 quantile_method="averaged_inverted_cdf")
+        steps.append(("coord", Pipeline([("impute", SimpleImputer(strategy="median")), ("bands", bands)]), coordinates))
+    if time:
+        steps.append(("time", OneHotEncoder(handle_unknown="ignore", sparse_output=True), time))
+    return ColumnTransformer(steps, remainder="drop", sparse_threshold=1.0)
+
+
 def build_encoder(features=None):
     """Pipeline step 2: turn the cleaned feature table into numbers."""
     features = features or FINAL_FEATURES
@@ -162,10 +189,14 @@ def build_encoder(features=None):
     return ColumnTransformer(steps, remainder="drop", sparse_threshold=1.0)
 
 
-def build_pipeline(model=None, features=None):
-    """The full pipeline. Without a model it stops after encoding."""
+def build_pipeline(model=None, features=None, binary=False):
+    """The full pipeline. Without a model it stops after encoding.
+
+    binary=True uses the all-0/1 encoder (for Bernoulli Naive Bayes).
+    """
     features = list(features or FINAL_FEATURES)
-    steps = [("clean", RequestCleaner(features=features)), ("encode", build_encoder(features))]
+    encoder = build_binary_encoder(features) if binary else build_encoder(features)
+    steps = [("clean", RequestCleaner(features=features)), ("encode", encoder)]
     if model is not None:
         steps.append(("model", model))
     return Pipeline(steps)

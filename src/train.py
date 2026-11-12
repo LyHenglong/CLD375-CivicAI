@@ -1,9 +1,9 @@
-"""Model comparison code (Phase 5).
+"""Model comparison code (Phase 5 and 5b).
 
 notebooks/03_model_comparison.ipynb calls these functions and explains the results.
 Every model is the clean/encode pipeline from src/features.py plus a classifier.
 
-Re-check the tuned models from the project root (uses reports/best_settings.json):
+Re-check the validation table from the project root (uses reports/best_settings.json):
     python -m src.train
 """
 
@@ -32,6 +32,7 @@ from src import features as ft
 SEED = 42
 CV_FOLDS = 5
 BEST_SETTINGS_FILE = Path("reports/best_settings.json")
+TUNING_FILE = Path("reports/tuning_results.csv")
 
 
 def load_xy(split, folder=ft.PROCESSED_DIR):
@@ -76,9 +77,12 @@ def make_baselines():
 
 
 # ---------------------------------------------------------------- models
-# The six candidates. All of them accept the sparse one-hot input of the pipeline.
+# The six candidates. All of them accept the sparse input of the pipeline.
 CANDIDATES = ["Logistic Regression", "Decision Tree", "Random Forest",
               "Extra Trees", "XGBoost", "Bernoulli Naive Bayes"]
+# Tuned in Phase 5 (results kept as they are) and added in Phase 5b
+PHASE5_MODELS = ["Logistic Regression", "Random Forest", "XGBoost"]
+PHASE5B_MODELS = ["Decision Tree", "Extra Trees", "Bernoulli Naive Bayes"]
 
 
 def class_ratio(y):
@@ -99,7 +103,7 @@ def default_settings(y_train):
         "Extra Trees": {"n_estimators": 100, "max_depth": 20, "min_samples_leaf": 5},
         "XGBoost": {"n_estimators": 300, "learning_rate": 0.1, "max_depth": 6,
                     "scale_pos_weight": round(class_ratio(y_train), 4)},
-        "Bernoulli Naive Bayes": {"alpha": 1.0},
+        "Bernoulli Naive Bayes": {"alpha": 1.0, "class_prior": [0.5, 0.5]},
     }
 
 
@@ -107,7 +111,7 @@ def make_model(name, settings):
     """Build the full pipeline (clean -> encode -> classifier) for one model.
 
     Every model handles the 17% minority class (class 0) in its own way:
-    class weights, scale_pos_weight, or an equal class prior.
+    class weights, scale_pos_weight, or the class prior.
     """
     if name == "Logistic Regression":
         classifier = LogisticRegression(class_weight="balanced", max_iter=3000, random_state=SEED, **settings)
@@ -118,43 +122,53 @@ def make_model(name, settings):
         classifier = RandomForestClassifier(class_weight="balanced_subsample", max_features="sqrt",
                                             random_state=SEED, n_jobs=-1, **settings)
     elif name == "Extra Trees":
-        # "balanced_subsample" needs bootstrap, so the plain "balanced" weights are used
-        classifier = ExtraTreesClassifier(class_weight="balanced", max_features="sqrt",
+        # Extra Trees does not resample rows (no bootstrap), so "balanced_subsample"
+        # gives the same weights as "balanced" here: one set, from the whole training data
+        classifier = ExtraTreesClassifier(class_weight="balanced_subsample", max_features="sqrt",
                                           random_state=SEED, n_jobs=-1, **settings)
     elif name == "XGBoost":
         # scale_pos_weight (in the settings) below 1 makes the common class 1 count less
         classifier = XGBClassifier(tree_method="hist", random_state=SEED, n_jobs=-1, **settings)
     elif name == "Bernoulli Naive Bayes":
-        # Equal class prior instead of the 83/17 split, so the rare class is not ignored.
-        # Inputs are turned into 0/1 flags (the default binarize=0.0).
-        classifier = BernoulliNB(class_prior=[0.5, 0.5], **settings)
+        # It has no class weights. class_prior (in the settings) tells it how common to
+        # assume each class is: [0.5, 0.5] = equally common, None = the real 17/83 shares.
+        # It expects yes/no inputs, so it gets the encoder where every column is 0 or 1.
+        return ft.build_pipeline(BernoulliNB(**settings), binary=True)
     else:
         raise ValueError(f"unknown model: {name}")
     return ft.build_pipeline(classifier)
 
 
 def settings_to_try(y_train):
-    """The small list of settings tried for each model (6 to 8 each).
+    """The small list of settings tried for each model.
 
-    Only the 3 selected models are tuned, after the selection.
+    Logistic Regression, Random Forest and XGBoost: 6 to 8 settings, tuned in Phase 5.
+    These lists must stay as they are, because the saved results belong to them.
+    Decision Tree, Extra Trees and Naive Bayes (Phase 5b): 4 settings each, the
+    first one being the default from default_settings().
     """
+    first = default_settings(y_train)
     ratio = class_ratio(y_train)                       # fully balances the two classes
     half = round(float(np.sqrt(ratio)), 4)             # a milder, half-way weighting
     ratio = round(ratio, 4)
     return {
         "Logistic Regression": [{"C": c} for c in [0.01, 0.03, 0.1, 0.3, 1.0, 3.0]],
-        "Decision Tree": [{"max_depth": d, "min_samples_leaf": leaf}
-                          for d in [8, 12, 16] for leaf in [10, 50]],
-        "Random Forest": [
-            {"n_estimators": 100, "max_depth": 20, "min_samples_leaf": 5},
-            {"n_estimators": 100, "max_depth": 30, "min_samples_leaf": 5},
-            {"n_estimators": 100, "max_depth": 40, "min_samples_leaf": 5},
-            {"n_estimators": 100, "max_depth": 30, "min_samples_leaf": 10},
-            {"n_estimators": 100, "max_depth": 40, "min_samples_leaf": 10},
-            {"n_estimators": 100, "max_depth": 40, "min_samples_leaf": 20},
+        "Decision Tree": [first["Decision Tree"],
+                          {"max_depth": 20, "min_samples_leaf": 20},
+                          {"max_depth": 30, "min_samples_leaf": 20},
+                          {"max_depth": 40, "min_samples_leaf": 20}],
+        "Random Forest": [      # 150 trees: the settings that were run in Phase 5
+            {"n_estimators": 150, "max_depth": 20, "min_samples_leaf": 5},
+            {"n_estimators": 150, "max_depth": 30, "min_samples_leaf": 5},
+            {"n_estimators": 150, "max_depth": 40, "min_samples_leaf": 5},
+            {"n_estimators": 150, "max_depth": 30, "min_samples_leaf": 10},
+            {"n_estimators": 150, "max_depth": 40, "min_samples_leaf": 10},
+            {"n_estimators": 150, "max_depth": 40, "min_samples_leaf": 20},
         ],
-        "Extra Trees": [{"n_estimators": 100, "max_depth": d, "min_samples_leaf": leaf}
-                        for d in [20, 30, 40] for leaf in [5, 10]],
+        "Extra Trees": [first["Extra Trees"],      # 100 trees keeps the saved file small
+                        {"n_estimators": 100, "max_depth": 30, "min_samples_leaf": 5},
+                        {"n_estimators": 100, "max_depth": 40, "min_samples_leaf": 5},
+                        {"n_estimators": 100, "max_depth": 40, "min_samples_leaf": 10}],
         "XGBoost": [
             {"n_estimators": 300, "learning_rate": 0.1, "max_depth": 4, "scale_pos_weight": ratio},
             {"n_estimators": 300, "learning_rate": 0.1, "max_depth": 6, "scale_pos_weight": ratio},
@@ -165,7 +179,10 @@ def settings_to_try(y_train):
             {"n_estimators": 600, "learning_rate": 0.05, "max_depth": 8, "scale_pos_weight": ratio},
             {"n_estimators": 600, "learning_rate": 0.05, "max_depth": 8, "scale_pos_weight": half},
         ],
-        "Bernoulli Naive Bayes": [{"alpha": a} for a in [0.03, 0.1, 0.3, 1.0, 3.0, 10.0]],
+        "Bernoulli Naive Bayes": [first["Bernoulli Naive Bayes"],
+                                  {"alpha": 1.0, "class_prior": None},
+                                  {"alpha": 0.1, "class_prior": [0.5, 0.5]},
+                                  {"alpha": 0.1, "class_prior": None}],
     }
 
 
@@ -193,6 +210,22 @@ def tune(name, settings_list, X, y):
         rows.append(row)
     table = pd.DataFrame(rows).sort_values(["cv_macro_f1_mean", "cv_roc_auc_mean"], ascending=False)
     return table.reset_index(drop=True)
+
+
+def load_or_tune(name, settings_list, X, y, path=TUNING_FILE):
+    """Return the saved tuning table for this model, or tune it now and save it.
+
+    Results already in the file are kept exactly as they are (no re-tuning).
+    Returns (table, True if it was loaded from the file).
+    """
+    path = Path(path)
+    saved = pd.read_csv(path) if path.exists() else pd.DataFrame(columns=["model", "settings"])
+    wanted = {json.dumps(s) for s in settings_list}
+    if set(saved.loc[saved["model"] == name, "settings"]) == wanted:
+        return saved[saved["model"] == name].reset_index(drop=True), True
+    table = tune(name, settings_list, X, y)
+    pd.concat([saved[saved["model"] != name], table], ignore_index=True).to_csv(path, index=False)
+    return table, False
 
 
 # ---------------------------------------------------------------- evaluation
@@ -258,9 +291,11 @@ if __name__ == "__main__":
     X_train, y_train = load_xy("train")
     X_val, y_val = load_xy("val")                    # the test split is not used here
     best_settings = json.loads(BEST_SETTINGS_FILE.read_text(encoding="utf-8"))
-    for model_name, model_settings in best_settings.items():
-        pipeline = make_model(model_name, model_settings)
+    pipelines = make_baselines()
+    pipelines.update({name: make_model(name, best_settings[name]) for name in CANDIDATES})
+    print(f"{'model':32s} accuracy  prec_0  recall_0  f1_0    macro_f1  roc_auc  seconds")
+    for model_name, pipeline in pipelines.items():
         seconds = fit_timed(pipeline, X_train, y_train)
-        result, _ = evaluate(pipeline, X_val, y_val)
-        print(f"{model_name:20s} macro F1 {result['macro_f1']:.4f}  ROC-AUC {result['roc_auc']:.4f}  "
-              f"recall class 0 {result['recall_0']:.4f}  ({seconds:.0f} s)")
+        r, _ = evaluate(pipeline, X_val, y_val)
+        print(f"{model_name:32s} {r['accuracy']:.4f}    {r['precision_0']:.4f}  {r['recall_0']:.4f}    "
+              f"{r['f1_0']:.4f}  {r['macro_f1']:.4f}    {r['roc_auc']:.4f}   {seconds:6.0f}")
