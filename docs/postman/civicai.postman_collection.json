@@ -1,0 +1,313 @@
+{
+  "info": {
+    "name": "CivicAI API",
+    "description": "Requests for the CivicAI API (will a New York 311 request be resolved within 7 days?). Set the collection variable base_url to the server address, for example http://localhost:8000 or http://<public-address-of-the-server>:8000. Every request has tests: run the collection with the Collection Runner.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "1 Health",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+              "pm.test('The model is loaded', () => { pm.expect(json.status).to.eql('ok'); pm.expect(json.model_loaded).to.eql(true); });",
+              "pm.test('Installed library versions match the model description', () => pm.expect(json.versions_match_model_meta).to.eql(true));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/health",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "health"
+          ]
+        },
+        "description": "200 when the model is loaded, 503 when it is not."
+      }
+    },
+    {
+      "name": "2 Model info",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+              "pm.test('Has version, label meaning, cut-off and input fields', () => { pm.expect(json.model_version).to.be.a('string'); pm.expect(json.label.decision_threshold).to.eql(0.61); pm.expect(json.input_fields).to.be.an('array'); });",
+              "pm.test('Shows no local file paths', () => pm.expect(pm.response.text()).to.not.include('.joblib'));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/model-info",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "model-info"
+          ]
+        },
+        "description": ""
+      }
+    },
+    {
+      "name": "3 Predict - valid: Blocked Driveway",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+              "pm.test('Response time is under 3 seconds', () => pm.expect(pm.response.responseTime).to.be.below(3000));",
+              "pm.test('Predicted class is 1 (true label in the data: 1)', () => pm.expect(json.predicted_class).to.eql(1));",
+              "pm.test('Label matches the class', () => pm.expect(json.label).to.eql(json.predicted_class === 1 ? 'resolved within 7 days' : 'not resolved within 7 days'));",
+              "pm.test('Probability equals the saved value (0.995128)', () => pm.expect(json.probability_resolved_within_7d).to.be.closeTo(0.995128, 0.000001));",
+              "pm.test('The two probabilities add up to 1', () => pm.expect(json.probability_resolved_within_7d + json.probability_not_resolved_within_7d).to.be.closeTo(1, 0.00001));",
+              "pm.test('Cut-off, 7 days and model version are returned', () => { pm.expect(json.decision_threshold).to.eql(0.61); pm.expect(json.threshold_days).to.eql(7); pm.expect(json.model_version).to.be.a('string'); });",
+              "pm.test('No warnings for a normal request', () => pm.expect(json.warnings).to.eql([]));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/predict",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "predict"
+          ]
+        },
+        "description": "A real request from the validation split.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"complaint_type\": \"Blocked Driveway\",\n  \"descriptor\": \"No Access\",\n  \"location_type\": \"Street/Sidewalk\",\n  \"borough\": \"STATEN ISLAND\",\n  \"incident_zip\": \"10306\",\n  \"open_data_channel_type\": \"PHONE\",\n  \"latitude\": 40.561436,\n  \"longitude\": -74.133752,\n  \"created_at\": \"2025-12-26T05:06:07\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "4 Predict - valid: Unsanitary Condition",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+              "pm.test('Response time is under 3 seconds', () => pm.expect(pm.response.responseTime).to.be.below(3000));",
+              "pm.test('Predicted class is 0 (true label in the data: 0)', () => pm.expect(json.predicted_class).to.eql(0));",
+              "pm.test('Label matches the class', () => pm.expect(json.label).to.eql(json.predicted_class === 1 ? 'resolved within 7 days' : 'not resolved within 7 days'));",
+              "pm.test('Probability equals the saved value (0.418025)', () => pm.expect(json.probability_resolved_within_7d).to.be.closeTo(0.418025, 0.000001));",
+              "pm.test('The two probabilities add up to 1', () => pm.expect(json.probability_resolved_within_7d + json.probability_not_resolved_within_7d).to.be.closeTo(1, 0.00001));",
+              "pm.test('Cut-off, 7 days and model version are returned', () => { pm.expect(json.decision_threshold).to.eql(0.61); pm.expect(json.threshold_days).to.eql(7); pm.expect(json.model_version).to.be.a('string'); });",
+              "pm.test('No warnings for a normal request', () => pm.expect(json.warnings).to.eql([]));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/predict",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "predict"
+          ]
+        },
+        "description": "A real request from the validation split; this one is predicted as NOT resolved within 7 days.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"complaint_type\": \"UNSANITARY CONDITION\",\n  \"descriptor\": \"MOLD\",\n  \"location_type\": \"RESIDENTIAL BUILDING\",\n  \"borough\": \"BRONX\",\n  \"incident_zip\": \"10475\",\n  \"open_data_channel_type\": \"PHONE\",\n  \"latitude\": 40.875189,\n  \"longitude\": -73.828991,\n  \"created_at\": \"2025-12-18T14:05:48\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "5 Predict - invalid: missing borough",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('Status is 422', () => pm.response.to.have.status(422));",
+              "pm.test('The error names the field: borough', () => pm.expect(json.errors.map(e => e.field)).to.include('borough'));",
+              "pm.test('The message is readable and has no stack trace', () => { pm.expect(json.message).to.be.a('string'); pm.expect(pm.response.text()).to.not.include('Traceback'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/predict",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "predict"
+          ]
+        },
+        "description": "borough is required. Expected: 422 naming borough.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"complaint_type\": \"Blocked Driveway\",\n  \"descriptor\": \"No Access\",\n  \"location_type\": \"Street/Sidewalk\",\n  \"incident_zip\": \"10306\",\n  \"open_data_channel_type\": \"PHONE\",\n  \"latitude\": 40.561436,\n  \"longitude\": -74.133752,\n  \"created_at\": \"2025-12-26T05:06:07\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "6 Predict - invalid: latitude is text",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('Status is 422', () => pm.response.to.have.status(422));",
+              "pm.test('The error names the field: latitude', () => pm.expect(json.errors.map(e => e.field)).to.include('latitude'));",
+              "pm.test('The message is readable and has no stack trace', () => { pm.expect(json.message).to.be.a('string'); pm.expect(pm.response.text()).to.not.include('Traceback'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/predict",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "predict"
+          ]
+        },
+        "description": "latitude must be a number. Expected: 422 naming latitude.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"complaint_type\": \"Illegal Parking\",\n  \"descriptor\": \"Blocked Hydrant\",\n  \"location_type\": \"Street/Sidewalk\",\n  \"borough\": \"QUEENS\",\n  \"incident_zip\": \"11372\",\n  \"open_data_channel_type\": \"ONLINE\",\n  \"latitude\": \"north of the park\",\n  \"longitude\": -73.890401,\n  \"created_at\": \"2026-03-29T11:12:40\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "7 Predict - invalid: impossible latitude",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('Status is 422', () => pm.response.to.have.status(422));",
+              "pm.test('The error names the field: latitude', () => pm.expect(json.errors.map(e => e.field)).to.include('latitude'));",
+              "pm.test('The message is readable and has no stack trace', () => { pm.expect(json.message).to.be.a('string'); pm.expect(pm.response.text()).to.not.include('Traceback'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/predict",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "predict"
+          ]
+        },
+        "description": "latitude 140.7 is not possible. Expected: 422 naming latitude.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"complaint_type\": \"Blocked Driveway\",\n  \"descriptor\": \"No Access\",\n  \"location_type\": \"Street/Sidewalk\",\n  \"borough\": \"STATEN ISLAND\",\n  \"incident_zip\": \"10306\",\n  \"open_data_channel_type\": \"PHONE\",\n  \"latitude\": 140.7,\n  \"longitude\": -74.133752,\n  \"created_at\": \"2025-12-26T05:06:07\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

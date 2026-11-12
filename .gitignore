@@ -8,6 +8,8 @@ __pycache__/
 *.pyc
 .ipynb_checkpoints/
 .pytest_cache/
+.pytest_tmp/
+logs/
 
 # model files (keep the folder via .gitkeep)
 models/*

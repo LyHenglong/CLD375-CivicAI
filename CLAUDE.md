@@ -87,7 +87,9 @@ Create this layout in Phase 0 and keep to it. Notebooks hold the exploration the
 civicai-ec2/
   CLAUDE.md
   README.md
-  requirements.txt
+  requirements.txt        # full development list
+  requirements-api.txt    # only what the API server needs, pinned to models/model_meta.json
+  pytest.ini
   .gitignore              # data/, models/, .env, *.pem, __pycache__/
   data/
     raw/                  # unchanged API pull
@@ -119,7 +121,8 @@ civicai-ec2/
     main.py
     schemas.py
     predictor.py
-    streamlit_app.py      # optional
+    __init__.py
+    streamlit_app.py      # optional, not built
   tests/
     test_api.py
   deploy/
@@ -127,6 +130,8 @@ civicai-ec2/
     ec2_setup.md
   docs/
     screenshots/
+    postman/civicai.postman_collection.json
+  logs/                   # created by the API: predictions.jsonl (gitignored)
 ```
 
 ## 5. Build phases
@@ -143,22 +148,23 @@ Do the phases in order. Each phase ends with its acceptance check, a short summa
 | 5. Model comparison | Nov 17-18 | In notebook 03 and `src/train.py`, train the two baselines and six candidate models (Logistic Regression, Decision Tree, Random Forest, Extra Trees, XGBoost, Bernoulli Naive Bayes), cross-validate on train with `TimeSeriesSplit(5)`, tune lightly, score on validation, save `reports/model_comparison.csv`, ROC curves and confusion matrices, and select 3 models for the stack with the rule in Section 3 | One table compares all models on the same split; best single model named with the metric used; the 3 selected models marked in `selected_for_stack` (done: XGBoost, Bernoulli Naive Bayes, Random Forest) |
 | 6. Stacking | Nov 18-19 | In notebook 04 and `src/train.py` (`build_stack`; `python -m src.train` rebuilds it and checks it against the saved results without reading the test split), build the `StackingClassifier`, compare it with each base model, score the test set once, save `models/model.joblib`, `metrics.json` and `model_meta.json`, and `data/sample_requests.json` | Stack versus base models table done (`reports/stacking_validation.csv`, `reports/test_results.csv`); the saved pipeline loads in a fresh Python process and predicts the sample requests (`src/check_saved_model.py`). Done: the stack did not beat XGBoost alone, and is deployed anyway |
 | 6b. Stack improvement | Nov 12 | In notebook 05: freeze v1 (tag `phase6-v1`); build a fresh forward test set; diagnose the gap to XGBoost (it was the decision threshold: 0.73 points at 0.5, 0.08 with tuned cut-offs); run 7 experiments logged in `reports/stacking_experiments.csv` (v1 members with a tuned cut-off, with and without class weights; XGBoost+LR+NB; XGBoost+LR+NB+RF; XGBoost+LR; two XGBoost depths; a gradient boosting final estimator); pick the winner by validation macro F1; refit on train only; score the forward test once | Done: winner XGBoost+LR+NB+RF, cut-off 0.61. Success criterion not met on validation (-0.12 points vs XGBoost alone); level with XGBoost alone on the clean forward test; +3.0 points over v1 |
-| 7. API | Nov 20-21 | Build the FastAPI app as specified in Section 6 and the tests in `tests/test_api.py` | `pytest` passes; `uvicorn app.main:app` runs locally; `/docs` shows the routes |
+| 7. API | Nov 20-21 | Build the FastAPI app as specified in Section 6 and the tests in `tests/test_api.py` | `pytest` passes; `uvicorn app.main:app` runs locally; `/docs` shows the routes. Done: 60 tests pass; also tested over real HTTP with uvicorn; Postman collection in `docs/postman/` |
 | 8. Deployment files | Nov 21-22 | Write `deploy/civicai.service` and `deploy/ec2_setup.md` (Section 7); the student runs them on EC2 | The student reports that `GET /health` works at the public address |
 | 9. End-to-end tests | Nov 23-24 | Make `tests/test_api.py` run against a remote URL from the `API_URL` environment variable; add a Postman collection under `docs/`; list the screenshots the student must capture | Valid and invalid requests behave as in Section 6 against the live EC2 API |
 | 10. Report support | Nov 24-25 | Write `reports/summary.md` with results tables, figure list and limitations, and a `README.md` with run steps | Every number in the summary comes from a saved results file |
 
 ## 6. API specification
 
-The API accepts a request's raw fields, derives hour, weekday, month and weekend flag on the server with the same code used in training, and returns the model's prediction.
+Built in Phase 7: `app/main.py` (routes), `app/schemas.py` (all input rules), `app/predictor.py` (loads the model once, builds the answer). The API accepts a request's raw fields, derives hour, weekday, month and weekend flag on the server with the same code used in training, and returns the model's prediction.
 
 | Route | Purpose |
 | --- | --- |
-| `GET /health` | Returns 200 with the model version when the model is loaded |
+| `GET /health` | 200 `{"status": "ok", "model_loaded": true, "model_version": ..., "versions_match_model_meta": ...}` when the model is loaded; **503** when it is not |
+| `GET /model-info` | The content of `models/model_meta.json` without local paths: version, training date, input fields, label meaning, cut-off, split dates, library versions. 503 when the model is not loaded |
 | `POST /predict` | Takes one request as JSON and returns the prediction |
-| `GET /docs` | Swagger UI generated by FastAPI |
+| `GET /docs` | Swagger UI generated by FastAPI (`/openapi.json` is the machine-readable version) |
 
-**Example request**
+**Example request** (`POST /predict`)
 
 ```json
 {
@@ -174,28 +180,68 @@ The API accepts a request's raw fields, derives hour, weekday, month and weekend
 }
 ```
 
-**Example response** (values are illustrative)
+**Example response** (200; real output of the v2 model for the request above)
 
 ```json
 {
   "predicted_class": 1,
   "label": "resolved within 7 days",
-  "probability_within_threshold": 0.82,
+  "probability_resolved_within_7d": 0.995099,
+  "probability_not_resolved_within_7d": 0.004901,
+  "decision_threshold": 0.61,
   "threshold_days": 7,
-  "model_version": "1.0"
+  "model_version": "2.0",
+  "warnings": []
 }
 ```
 
-**Rules**
+`predicted_class` is 1 ("resolved within 7 days") or 0 ("not resolved within 7 days"). It comes from the model's own `predict()`, which applies the cut-off 0.61 (`decision_threshold`); the API never compares a probability with 0.5. `warnings` is a list of plain-language notes, for example when a complaint type was not seen in training and is treated as "Other".
 
-- Define the input with a Pydantic model in `app/schemas.py`. Required fields: `complaint_type`, `borough`, `open_data_channel_type`, `created_at`. The others are optional and default to "Unknown" or missing.
-- Check ranges: latitude and longitude must be plausible numbers, and `created_at` must be a valid ISO date and time.
-- Load `models/model.joblib` once at startup in `app/predictor.py`, not on every request. Right after loading, set the Random Forest inside the stack to one thread: `from src.features import get_stack` then `get_stack(model).named_estimators_["random_forest"]["model"].n_jobs = 1`. Answers are identical and one prediction is faster. The pipeline needs the `src` package on the import path, so start the server from the project root.
-- **Decision rule.** The predicted class is 1 ("resolved within 7 days") when the probability is at or above the cut-off in `models/model_meta.json` (`label.decision_threshold`, 0.61 for v2). `model.predict()` already applies it, so use `predict()` for `predicted_class` and `predict_proba()[:, 1]` for `probability_within_threshold`; do not compare the probability with 0.5 in the API.
-- **The model does not validate input.** The three invalid requests in `data/sample_requests.json` (missing `borough`, text in `latitude`, `latitude` 140.7) still receive a probability if sent to the model directly. The Pydantic model must reject them with 422 and name the field. Use the valid requests in the same file as test cases: their probabilities must equal `expected_probability_within_threshold`.
-- Missing or invalid fields return 422 with the field named. A category the model never saw still returns a prediction, because the encoder ignores unknown values.
-- If the model fails to load, `/health` and `/predict` return 503 with a clear message. Never return a Python stack trace to the client.
-- Log each request and prediction to a local file for later review.
+**Example error** (422; the same request with `"latitude": 140.7`)
+
+```json
+{
+  "error": "validation_error",
+  "message": "The request was not accepted. Fix the field(s) named below and send it again: latitude.",
+  "errors": [
+    {"field": "latitude", "message": "latitude 140.7 is not a possible latitude: it must be between -90 and 90 (New York City is at about 40.7)"}
+  ]
+}
+```
+
+**Input rules** (the model itself does not validate anything; all of these are in `app/schemas.py`, and an invalid request gets 422 with the field named)
+
+| Field | Required | Rule |
+| --- | --- | --- |
+| `complaint_type`, `borough`, `open_data_channel_type` | yes | text, 1 to 200 characters after trimming; any case. A value the model has not seen is **accepted** and answered with a warning |
+| `created_at` | yes | text in ISO 8601 with date AND time (`2026-11-09T22:15:00`); a time zone is converted to New York time; not before 2020-01-01 and not more than 1 day in the future; no numbers, no date-only |
+| `descriptor`, `location_type` | no | text, 1 to 200 characters; leave out or send `null`; an empty string is rejected |
+| `incident_zip` | no | text of exactly 5 digits (a JSON number is rejected); a ZIP outside New York is accepted with a warning |
+| `latitude`, `longitude` | no | JSON numbers (text and booleans are rejected); latitude 40.3 to 41.1, longitude -74.4 to -73.5 (a generous New York box; a message says "not possible" outside -90..90 / -180..180 and "outside New York" for the rest); both or neither. A point inside the box but outside the area the model was trained on (latitude 40.47 to 40.93, longitude -74.27 to -73.68) is accepted with a warning and ignored by the model |
+| any other field | - | **rejected** with 422 naming it (a misspelt field would otherwise be ignored silently) |
+
+A broken JSON body, a body that is not an object, and an empty body also return 422.
+
+**Other rules**
+
+- Load `models/model.joblib` once at startup (`app/predictor.py`), never per request. The path comes from the environment variable `CIVICAI_MODEL_PATH` (default `models/model.joblib` in the project folder); `CIVICAI_META_PATH` (default `model_meta.json` next to the model), `CIVICAI_LOG_DIR` (default `logs/`) and `CIVICAI_WARMUP` (`0` turns the startup warm-up off) are optional.
+- After loading, the Random Forest inside the stack is set to one thread (`get_stack(model).named_estimators_["random_forest"]["model"].n_jobs = 1`; same answers). The pipeline needs the `src` package: start the server from the project root.
+- At startup the installed Python (major.minor), scikit-learn, xgboost, pandas, numpy and joblib versions are compared with `models/model_meta.json`; a mismatch is logged as a warning and shown by `GET /health` (`versions_match_model_meta`).
+- If the model fails to load the API still starts; `/health`, `/model-info` and `/predict` return 503 with a clear message and no file paths. An unexpected error returns 500 with no stack trace (the details go to the server log).
+- Each successful prediction is logged to `logs/predictions.jsonl` (rotating file, gitignored): time, complaint type, borough, channel, class, probability, number of warnings, milliseconds. **No coordinates, ZIP code, descriptor or place type are logged.** Validation failures are logged by field name only.
+- Sample requests for tests and demos: `data/sample_requests.json` (5 valid requests from the validation split with the saved probabilities, 3 invalid ones with the expected 422).
+
+**Run and test locally** (from the project root, with the project virtual environment active)
+
+```text
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000     # then open http://127.0.0.1:8000/docs
+python -m pytest                                                # 60 tests, about 25 seconds
+python -I src/check_saved_model.py                              # checks the model file against model_meta.json without the API
+```
+
+Postman: import `docs/postman/civicai.postman_collection.json`; its variable `base_url` defaults to `http://localhost:8000`; change it to the EC2 address for Phase 9. Each request has tests.
+
+**Versions that must match on EC2** (`requirements-api.txt`, from `models/model_meta.json`): Python 3.10 (the model was built with 3.10.10; use Ubuntu 22.04, whose Python is 3.10.x; a different minor version only produces a warning but is not tested), scikit-learn 1.7.2, xgboost 3.2.0, pandas 2.3.3, numpy 2.2.6, joblib 1.6.0, fastapi 0.162.2, uvicorn 0.54.0, pydantic 2.14.3.
 
 ## 7. EC2 deployment
 
@@ -206,9 +252,9 @@ You write the files and the step-by-step commands. The student runs them on thei
 1. Launch an Ubuntu EC2 instance. Start small, and check the model file size and memory use before choosing. Check current pricing and free-tier terms first.
 2. Create a key pair and a security group: SSH only from the student's IP, and one TCP port for the API (8000).
 3. Connect over SSH and install `python3-venv` and `python3-pip`.
-4. Copy `app/`, `src/__init__.py`, `src/preprocessing.py`, `src/features.py`, `models/model.joblib`, `models/model_meta.json` and `requirements.txt` to the server with `scp`, keeping the same folder layout. The saved pipeline needs the three `src/` files to load. `models/cleaning_values.json` is not needed on the server. `models/model.joblib` is not in Git, so it must be copied with `scp` (about 20 MB). To check the copy on the server, also copy `src/check_saved_model.py` and `data/sample_requests.json` and run `python -I src/check_saved_model.py` from the project root; it verifies the SHA-256 and the library versions in `model_meta.json` and the five sample probabilities.
-5. Create a virtual environment on the server and install the pinned requirements. The scikit-learn version (1.7.2) must match `model_meta.json`; use the same xgboost, pandas, numpy and joblib versions too.
-6. Test by running `uvicorn app.main:app --host 0.0.0.0 --port 8000` from the project root (so that `src` can be imported), then call `GET /health` from the student's laptop using the instance's public address.
+4. Copy `app/`, `src/__init__.py`, `src/preprocessing.py`, `src/features.py`, `models/model.joblib`, `models/model_meta.json` and `requirements-api.txt` to the server with `scp`, keeping the same folder layout. The saved pipeline needs the three `src/` files to load. `models/cleaning_values.json` is not needed on the server. `models/model.joblib` is not in Git, so it must be copied with `scp` (about 20 MB). To check the copy on the server, also copy `src/check_saved_model.py` and `data/sample_requests.json` and run `python -I src/check_saved_model.py` from the project root; it verifies the SHA-256 and the library versions in `model_meta.json` and the five sample probabilities.
+5. Create a virtual environment on the server and install `requirements-api.txt` (not the full `requirements.txt`). The scikit-learn version (1.7.2) must match `model_meta.json`; use the same xgboost, pandas, numpy and joblib versions too.
+6. Test by running `python -m uvicorn app.main:app --host 0.0.0.0 --port 8000` from the project root (so that `src` can be imported), then call `GET /health` from the student's laptop using the instance's public address.
 7. Install the `systemd` service below so the API restarts and survives closing the terminal.
 8. Stop the instance when not testing. Its public address changes after a stop and start unless an Elastic IP is attached, so update `API_URL` each time.
 
