@@ -53,7 +53,7 @@
             "exec": [
               "const json = pm.response.json();",
               "pm.test('Status is 200', () => pm.response.to.have.status(200));",
-              "pm.test('Has version, label meaning, cut-off and input fields', () => { pm.expect(json.model_version).to.be.a('string'); pm.expect(json.label.decision_threshold).to.eql(0.61); pm.expect(json.input_fields).to.be.an('array'); });",
+              "pm.test('Has version, label meaning, cut-off and input fields', () => { pm.expect(json.model_version).to.be.a('string'); pm.expect(json.label.decision_threshold).to.eql(0.5); pm.expect(json.input_fields).to.be.an('array'); });",
               "pm.test('Shows no local file paths', () => pm.expect(pm.response.text()).to.not.include('.joblib'));"
             ]
           }
@@ -87,9 +87,9 @@
               "pm.test('Response time is under 3 seconds', () => pm.expect(pm.response.responseTime).to.be.below(3000));",
               "pm.test('Predicted class is 1 (true label in the data: 1)', () => pm.expect(json.predicted_class).to.eql(1));",
               "pm.test('Label matches the class', () => pm.expect(json.label).to.eql(json.predicted_class === 1 ? 'resolved within 7 days' : 'not resolved within 7 days'));",
-              "pm.test('Probability equals the saved value (0.995128)', () => pm.expect(json.probability_resolved_within_7d).to.be.closeTo(0.995128, 0.000001));",
+              "pm.test('Probability equals the saved value (0.998889)', () => pm.expect(json.probability_resolved_within_7d).to.be.closeTo(0.998889, 0.000001));",
               "pm.test('The two probabilities add up to 1', () => pm.expect(json.probability_resolved_within_7d + json.probability_not_resolved_within_7d).to.be.closeTo(1, 0.00001));",
-              "pm.test('Cut-off, 7 days and model version are returned', () => { pm.expect(json.decision_threshold).to.eql(0.61); pm.expect(json.threshold_days).to.eql(7); pm.expect(json.model_version).to.be.a('string'); });",
+              "pm.test('Cut-off, 7 days and model version are returned', () => { pm.expect(json.decision_threshold).to.eql(0.5); pm.expect(json.threshold_days).to.eql(7); pm.expect(json.model_version).to.be.a('string'); });",
               "pm.test('No warnings for a normal request', () => pm.expect(json.warnings).to.eql([]));"
             ]
           }
@@ -137,9 +137,9 @@
               "pm.test('Response time is under 3 seconds', () => pm.expect(pm.response.responseTime).to.be.below(3000));",
               "pm.test('Predicted class is 0 (true label in the data: 0)', () => pm.expect(json.predicted_class).to.eql(0));",
               "pm.test('Label matches the class', () => pm.expect(json.label).to.eql(json.predicted_class === 1 ? 'resolved within 7 days' : 'not resolved within 7 days'));",
-              "pm.test('Probability equals the saved value (0.418025)', () => pm.expect(json.probability_resolved_within_7d).to.be.closeTo(0.418025, 0.000001));",
+              "pm.test('Probability equals the saved value (0.279704)', () => pm.expect(json.probability_resolved_within_7d).to.be.closeTo(0.279704, 0.000001));",
               "pm.test('The two probabilities add up to 1', () => pm.expect(json.probability_resolved_within_7d + json.probability_not_resolved_within_7d).to.be.closeTo(1, 0.00001));",
-              "pm.test('Cut-off, 7 days and model version are returned', () => { pm.expect(json.decision_threshold).to.eql(0.61); pm.expect(json.threshold_days).to.eql(7); pm.expect(json.model_version).to.be.a('string'); });",
+              "pm.test('Cut-off, 7 days and model version are returned', () => { pm.expect(json.decision_threshold).to.eql(0.5); pm.expect(json.threshold_days).to.eql(7); pm.expect(json.model_version).to.be.a('string'); });",
               "pm.test('No warnings for a normal request', () => pm.expect(json.warnings).to.eql([]));"
             ]
           }

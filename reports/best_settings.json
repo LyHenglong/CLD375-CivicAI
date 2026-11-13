@@ -43,5 +43,11 @@
       "C": 0.1
     },
     "threshold": 0.61
+  },
+  "Final model": {
+    "model": "XGBoost",
+    "settings_from": "XGBoost",
+    "decision_threshold": 0.5,
+    "model_version": "3.0"
   }
 }

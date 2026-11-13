@@ -3,9 +3,12 @@
 notebooks/03_model_comparison.ipynb and notebooks/04_stacking.ipynb call these
 functions and explain the results.
 
-Rebuild the final stacking model from the project root and check it against the
-saved results (this reads the train and validation splits only, never the test split):
+Rebuild the final model (XGBoost alone, version 3.0) from the project root and check it
+against the saved results (this reads the train and validation splits only, never a test split):
     python -m src.train
+Rebuild the stacking models that were compared with it:
+    python -m src.train --stack        # the improved stack (version 2.0)
+    python -m src.train --v1           # the Phase 6 stack (version 1.0)
 Print the Phase 5 table of the six candidates instead:
     python -m src.train --candidates
 """
@@ -41,6 +44,8 @@ BEST_SETTINGS_FILE = Path("reports/best_settings.json")
 TUNING_FILE = Path("reports/tuning_results.csv")
 STACK_FINAL_KEY = "Stacking final estimator"        # its entry in best_settings.json (v1 stack)
 STACK_V2_KEY = "Stack v2"                           # the improved stack of Phase 6b
+FINAL_KEY = "Final model"                           # the deployed model (XGBoost alone, Phase 6c)
+FINAL_VALIDATION_FILE = Path("reports/final_model_validation.csv")
 STACK_VALIDATION_FILE = Path("reports/stacking_validation.csv")
 MODEL_FILE = Path("models/model.joblib")
 
@@ -483,19 +488,56 @@ def build_stack_v2(best_settings, config):
     return Pipeline([("clean", ft.RequestCleaner(features=list(ft.FINAL_FEATURES))), ("stack", with_cutoff)])
 
 
+def xgb_contributions(model, X):
+    """Split every XGBoost prediction into one contribution per original feature.
+
+    Uses the TreeSHAP method that is built into XGBoost (no extra library). The numbers are in
+    "log-odds": positive pushes towards class 1 (resolved within 7 days), negative towards class 0.
+    For each request:  log-odds = bias + sum of the contributions,  probability = 1 / (1 + exp(-log-odds)).
+
+    model: the pipeline made by build_final_model, fitted.  X: the raw request fields.
+    Returns (cleaned rows, DataFrame with one column per original feature, bias).
+    """
+    import xgboost as xgb
+
+    cleaned = model["clean"].transform(X)
+    encoded = model["encode"].transform(cleaned)
+    names = model["encode"].get_feature_names_out()
+    raw = model["model"].get_booster().predict(xgb.DMatrix(encoded), pred_contribs=True)   # last column = bias
+    features = sorted(model["clean"].features, key=len, reverse=True)
+    owner = np.array([next(f for f in features if n.split("__", 1)[1].replace("missingindicator_", "").startswith(f))
+                      for n in names])                                     # which original feature a column belongs to
+    by_feature = pd.DataFrame({f: raw[:, :-1][:, owner == f].sum(axis=1) for f in model["clean"].features},
+                              index=cleaned.index)
+    return cleaned, by_feature, float(raw[0, -1])
+
+
+def build_final_model(best_settings):
+    """The deployed model: the shared cleaning step, the shared encoder and one XGBoost.
+
+    Same pipeline as the "XGBoost" candidate of Phase 5, with the settings tuned there
+    (reports/best_settings.json). Class 1 is predicted when its probability is above 0.5.
+    """
+    return make_model("XGBoost", best_settings["XGBoost"])
+
+
 # ---------------------------------------------------------------- re-check
 if __name__ == "__main__":
     import sys
 
     X_train, y_train = load_xy("train")
-    X_val, y_val = load_xy("val")                    # the test split is never read here
+    X_val, y_val = load_xy("val")                    # no test split is ever read here
     best_settings = json.loads(BEST_SETTINGS_FILE.read_text(encoding="utf-8"))
     if "--candidates" not in sys.argv:
-        if STACK_V2_KEY in best_settings and "--v1" not in sys.argv:
+        if "--stack" not in sys.argv and "--v1" not in sys.argv:
+            print(f"Rebuilding the final model {best_settings[FINAL_KEY]} and fitting it on the training split...")
+            stack_model = build_final_model(best_settings)
+            saved_row, saved_file = "XGBoost alone", FINAL_VALIDATION_FILE
+        elif "--v1" not in sys.argv:
             config = best_settings[STACK_V2_KEY]
             print(f"Rebuilding the v2 stack {config} and fitting it on the training split...")
             stack_model = build_stack_v2(best_settings, config)
-            saved_row, saved_file = "Stack v2", Path("reports/stacking_v2_validation.csv")
+            saved_row, saved_file, MODEL_FILE = "Stack v2", Path("reports/stacking_v2_validation.csv"), Path("models/model_stack_v2.joblib")
         else:
             stack_final = final_estimator_settings(best_settings)
             print(f"Rebuilding the v1 stack (final estimator {stack_final}) and fitting it on the training split...")
@@ -506,7 +548,7 @@ if __name__ == "__main__":
         result, probability = evaluate(stack_model, X_val, y_val)
         print(f"Fitted in {seconds:.0f} s. Validation: accuracy {result['accuracy']:.4f}  macro F1 {result['macro_f1']:.4f}  "
               f"ROC-AUC {result['roc_auc']:.4f}  class 0 precision {result['precision_0']:.4f} recall {result['recall_0']:.4f}")
-        if hasattr(ft.get_stack(stack_model).final_estimator_, "coef_"):
+        if "stack" in stack_model.named_steps and hasattr(ft.get_stack(stack_model).final_estimator_, "coef_"):
             weights, intercept = stack_weights(stack_model)
             print("Learned weights:", {k: round(float(v), 4) for k, v in weights.items()}, f"intercept {intercept:.4f}")
         if STACK_VALIDATION_FILE.exists():

@@ -1,5 +1,5 @@
 {
-  "description": "Raw requests in the format of the API (CLAUDE.md section 6), with the answers of the v2 model. valid_requests come from the VALIDATION split (no test split was used); the predicted class is 1 when the probability is at or above decision_threshold. invalid_requests must be rejected by the API with the status shown.",
+  "description": "Raw requests in the format of the API (CLAUDE.md section 6), with the answers of the final model (XGBoost alone, version 3.0). valid_requests come from the VALIDATION split (no test split was used); the predicted class is 1 when the probability is above decision_threshold. invalid_requests must be rejected by the API with the status shown.",
   "label_meaning": {
     "1": "resolved within 7 days",
     "0": "not resolved within 7 days"
@@ -21,7 +21,7 @@
       },
       "true_label": 1,
       "expected_predicted_class": 1,
-      "expected_probability_within_threshold": 0.995128090931
+      "expected_probability_within_threshold": 0.998889386654
     },
     {
       "name": "validation_example_2",
@@ -39,7 +39,7 @@
       },
       "true_label": 1,
       "expected_predicted_class": 1,
-      "expected_probability_within_threshold": 0.995162736034
+      "expected_probability_within_threshold": 0.998968243599
     },
     {
       "name": "validation_example_3",
@@ -57,7 +57,7 @@
       },
       "true_label": 1,
       "expected_predicted_class": 1,
-      "expected_probability_within_threshold": 0.846709627871
+      "expected_probability_within_threshold": 0.642572879791
     },
     {
       "name": "validation_example_4",
@@ -75,7 +75,7 @@
       },
       "true_label": 0,
       "expected_predicted_class": 0,
-      "expected_probability_within_threshold": 0.418025172859
+      "expected_probability_within_threshold": 0.279704451561
     },
     {
       "name": "validation_example_5",
@@ -93,7 +93,7 @@
       },
       "true_label": 0,
       "expected_predicted_class": 0,
-      "expected_probability_within_threshold": 0.300234052482
+      "expected_probability_within_threshold": 0.212497964501
     }
   ],
   "invalid_requests": [
@@ -148,5 +148,5 @@
       "expected_error_field": "latitude"
     }
   ],
-  "decision_threshold": 0.61
+  "decision_threshold": 0.5
 }

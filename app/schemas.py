@@ -85,7 +85,10 @@ class PredictRequest(BaseModel):
         description="More detail about the complaint. Leave the field out (or send null) if unknown; an empty string is rejected.")
     location_type: Optional[str] = Field(
         None, min_length=1, max_length=MAX_TEXT_LENGTH,
-        description="Kind of place, for example 'Residential Building/House'. Leave out if unknown.")
+        description="Kind of place, written the way the 311 system records it: for example 'Residential Building/House' for noise complaints, "
+                    "'RESIDENTIAL BUILDING' for housing complaints, 'Street/Sidewalk' for parking. OPTIONAL, BUT IT IS THE MODEL'S MOST IMPORTANT INPUT: "
+                    "the place also tells the model which city agency handles the request. Without it the model catches far fewer slow requests "
+                    "(about 28% instead of 82% in validation) and the response carries a warning.")
     incident_zip: Optional[str] = Field(
         None, min_length=1, max_length=MAX_TEXT_LENGTH,
         description="5-digit ZIP code, sent as text (for example \"11201\"). A ZIP outside New York is accepted and ignored, with a warning.")
@@ -169,11 +172,14 @@ class PredictResponse(BaseModel):
     """The model's answer for one request."""
 
     predicted_class: int = Field(..., description="1 = resolved within 7 days, 0 = not resolved within 7 days. "
-                                                  "Decided by the model's own cut-off (model.predict()).")
+                                                  "Decided by the model's own cut-off (model.predict()): 1 when the probability is above decision_threshold.")
     label: str = Field(..., description="Text for predicted_class")
-    probability_resolved_within_7d: float = Field(..., description="Probability of class 1, between 0 and 1")
+    probability_resolved_within_7d: float = Field(..., description="A score between 0 and 1: higher means more likely to be resolved within 7 days. "
+                                                                    "It is not an exact chance: the model was trained to pay extra attention to slow requests, "
+                                                                    "so in validation the real share resolved within 7 days was 7 to 17 points higher than this number "
+                                                                    "for scores between 0.1 and 0.9 (notebook 06, section 6).")
     probability_not_resolved_within_7d: float = Field(..., description="Probability of class 0 (1 minus the line above)")
-    decision_threshold: float = Field(..., description="The cut-off used: predicted_class is 1 when the probability of class 1 is at or above it")
+    decision_threshold: float = Field(..., description="The cut-off used: predicted_class is 1 when the probability of class 1 is above it")
     threshold_days: int = Field(..., description="The 7 in 'resolved within 7 days'")
     model_version: str
     warnings: List[str] = Field(default_factory=list,

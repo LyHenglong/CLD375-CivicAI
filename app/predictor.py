@@ -43,8 +43,8 @@ CATEGORY_FIELDS = ["complaint_type", "descriptor", "location_type", "borough", "
 MODEL_FIELDS = ["complaint_type", "descriptor", "location_type", "borough", "incident_zip",
                 "open_data_channel_type", "latitude", "longitude", "created_at"]
 
-# Keys of model_meta.json that are not shown by GET /model-info (local paths and deployment notes)
-HIDDEN_META_KEYS = {"file", "requires_on_server", "start_from"}
+# Keys of model_meta.json that are not shown by GET /model-info (file names, deployment notes, version history)
+HIDDEN_META_KEYS = {"file", "requires_on_server", "start_from", "previous_versions", "previous_version"}
 
 
 class ModelNotAvailable(Exception):
@@ -129,6 +129,7 @@ class Predictor:
             log.error("The model could not be loaded from %s (%s: %s). /health and /predict will answer 503.",
                       model_path, type(error).__name__, error)
             return self
+        self.after_cleaning = self.model[1:]              # every step after the shared cleaning step
         self._use_one_thread_for_the_forest()
         self.version_mismatches = check_versions(self.meta["versions"])
         for problem in self.version_mismatches:
@@ -141,14 +142,15 @@ class Predictor:
         return self
 
     def _use_one_thread_for_the_forest(self):
-        """The Random Forest was fitted with n_jobs=-1. For one request, starting threads costs more
-        than it saves, so it is set to one thread. The answers do not change."""
+        """Only for a stacking model that contains a Random Forest (versions 1.0 and 2.0): the forest was
+        fitted with n_jobs=-1, and for one request starting threads costs more than it saves, so it is set
+        to one thread. The answers do not change. The deployed XGBoost model has no forest: nothing to do."""
         from src.features import get_stack
         try:
             forest = get_stack(self.model).named_estimators_["random_forest"]["model"]
             forest.n_jobs = 1
         except (KeyError, AttributeError):
-            pass                                          # a model without a forest: nothing to do
+            pass
 
     def _warm_up(self):
         """One throw-away prediction, so that the first real request is not slower than the rest."""
@@ -163,10 +165,7 @@ class Predictor:
         """models/model_meta.json without local paths and deployment notes."""
         if not self.ready:
             raise ModelNotAvailable
-        shown = {key: value for key, value in self.meta.items() if key not in HIDDEN_META_KEYS}
-        if isinstance(shown.get("previous_version"), dict):
-            shown["previous_version"] = {k: v for k, v in shown["previous_version"].items() if k != "file"}
-        return shown
+        return {key: value for key, value in self.meta.items() if key not in HIDDEN_META_KEYS}
 
     # ---------------------------------------------------------------- prediction
     def predict(self, request: PredictRequest, log_it=True):
@@ -175,13 +174,12 @@ class Predictor:
         start = time.perf_counter()
         row = pd.DataFrame([{name: getattr(request, name) for name in MODEL_FIELDS}])
 
-        # Pipeline.predict() is "clean the row, then ask the stack". Doing the two steps by hand
+        # Pipeline.predict() is "clean the row, then ask the rest of the pipeline". Doing the two parts by hand
         # lets the cleaning run once, and the cleaned row is also used for the warnings.
-        # The class comes from the stack's predict(), which applies the model's cut-off.
+        # The class comes from the model's own predict(), which applies its cut-off.
         cleaned = self.model["clean"].transform(row)
-        stack = self.model["stack"]
-        probability = float(stack.predict_proba(cleaned)[0, 1])
-        predicted_class = int(stack.predict(cleaned)[0])
+        probability = float(self.after_cleaning.predict_proba(cleaned)[0, 1])
+        predicted_class = int(self.after_cleaning.predict(cleaned)[0])
 
         result = {
             "predicted_class": predicted_class,
@@ -214,6 +212,10 @@ class Predictor:
                     notes.append(f"incident_zip '{given}' is not a New York City ZIP code, so it is ignored.")
                 else:
                     notes.append(f"{field} '{given}' is not a recognised value, so the model treats it as unknown.")
+        if request.location_type is None:
+            notes.append("location_type was not given. It is the model's most important input (it also tells the model which city agency "
+                         "handles the request): in validation the model caught only about 28% of the slow requests without it, "
+                         "against 82% with it. Send it if you can, written the way the 311 system records it.")
         if request.latitude is not None and pd.isna(cleaned.iloc[0]["latitude"]):
             from src.preprocessing import NYC_LAT_RANGE, NYC_LON_RANGE
             notes.append("The coordinates are outside the area the model was trained on "

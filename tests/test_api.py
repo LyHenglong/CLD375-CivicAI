@@ -63,12 +63,12 @@ def test_model_info_is_the_meta_file_without_paths(client):
     response = client.get("/model-info")
     assert response.status_code == 200
     info = response.json()
-    for key in ["model_version", "trained_on", "versions", "input_fields", "label", "split", "final_estimator"]:
+    for key in ["model_version", "trained_on", "versions", "input_fields", "label", "split", "model", "pipeline"]:
         assert key in info
     assert info["label"]["decision_threshold"] == META["label"]["decision_threshold"]
     assert info["label"]["1"] == "resolved within 7 days" and info["label"]["0"] == "not resolved within 7 days"
     assert info["split"]["test"]["to"] == META["split"]["test"]["to"]
-    for hidden in ["file", "requires_on_server", "start_from"]:
+    for hidden in ["file", "requires_on_server", "start_from", "previous_versions"]:
         assert hidden not in info
     text = json.dumps(info)
     assert ".joblib" not in text and not re.search(r"[A-Za-z]:\\", text) and "/home/" not in text
@@ -102,24 +102,40 @@ def test_api_class_equals_model_predict(client, saved_model, sample):
     assert body["predicted_class"] == int(saved_model.predict(row)[0])
     assert abs(body["probability_resolved_within_7d"] - float(saved_model.predict_proba(row)[0, 1])) < 1e-6
     cutoff = META["label"]["decision_threshold"]
-    assert body["predicted_class"] == int(saved_model.predict_proba(row)[0, 1] >= cutoff)       # the cut-off is not 0.5
+    assert body["predicted_class"] == int(saved_model.predict_proba(row)[0, 1] > cutoff)       # the cut-off comes from the model
 
 
-def test_cutoff_is_applied_not_0_5(client, saved_model):
-    """A request whose probability lies between 0.5 and the cut-off must come out as class 0.
+PLACES = [("Plumbing", "RESIDENTIAL BUILDING"), ("Unsanitary Condition", "RESIDENTIAL BUILDING"), ("Paint/Plaster", "RESIDENTIAL BUILDING"),
+          ("Street Condition", "STREET"), ("Snow or Ice", "STREET"), ("Illegal Parking", "Street/Sidewalk"),
+          ("Noise - Residential", "Residential Building/House"), ("Heat/Hot Water", "RESIDENTIAL BUILDING"),
+          ("Water System", "Unknown"), ("Maintenance or Facility", "RESIDENTIAL BUILDING")]
 
-    "Maintenance or Facility" filed by phone in Brooklyn gets a probability of about 0.55 from
-    this model, and the cut-off is 0.61. If the API compared the probability with 0.5 it would say 1.
-    """
-    cutoff = META["label"]["decision_threshold"]
-    request = {"complaint_type": "Maintenance or Facility", "borough": "BROOKLYN", "open_data_channel_type": "PHONE",
-               "created_at": "2026-02-10T14:00:00"}
-    probability = float(saved_model.predict_proba(pd.DataFrame([request]))[0, 1])
-    assert 0.5 <= probability < cutoff, f"the premise of this test no longer holds (probability {probability:.3f})"
+
+@pytest.mark.parametrize("complaint_type,place", PLACES)
+def test_class_follows_the_cutoff_in_model_meta(client, saved_model, complaint_type, place):
+    """Over requests with very different probabilities, the API's class is the model's predict(), and
+    is 1 exactly when the probability is above the cut-off written in model_meta.json."""
+    request = {**BASE, "complaint_type": complaint_type, "location_type": place, "descriptor": "Unknown text"}
+    row = pd.DataFrame([request])
     body = client.post("/predict", json=request).json()
-    assert body["predicted_class"] == 0 and body["label"] == "not resolved within 7 days"
-    assert 0.5 <= body["probability_resolved_within_7d"] < cutoff
-    assert body["predicted_class"] == int(saved_model.predict(pd.DataFrame([request]))[0])
+    cutoff = META["label"]["decision_threshold"]
+    assert body["decision_threshold"] == cutoff
+    assert body["predicted_class"] == int(saved_model.predict(row)[0])
+    assert body["predicted_class"] == int(float(saved_model.predict_proba(row)[0, 1]) > cutoff)
+    assert body["label"] == META["label"][str(body["predicted_class"])]
+
+
+def test_both_classes_occur(client):
+    """The five sample requests contain predictions of both classes, so the tests above are not trivially one-sided."""
+    classes = {item["expected_predicted_class"] for item in VALID}
+    assert classes == {0, 1}
+
+
+def test_missing_location_type_gets_a_warning(client):
+    body = client.post("/predict", json=BASE).json()               # BASE has no location_type
+    assert len(body["warnings"]) == 1 and body["warnings"][0].startswith("location_type was not given")
+    with_place = client.post("/predict", json={**BASE, "location_type": "Residential Building/House"}).json()
+    assert with_place["warnings"] == []
 
 
 def test_optional_fields_can_be_left_out_or_null(client):
@@ -129,7 +145,8 @@ def test_optional_fields_can_be_left_out_or_null(client):
 
 
 def test_case_spaces_and_time_zone_are_tolerated(client):
-    messy = {**BASE, "borough": "  brooklyn ", "complaint_type": "noise - residential", "created_at": "2026-11-09T22:15:00Z"}
+    messy = {**BASE, "borough": "  brooklyn ", "complaint_type": "noise - residential", "created_at": "2026-11-09T22:15:00Z",
+             "location_type": "Residential Building/House"}
     body = client.post("/predict", json=messy).json()
     assert body["warnings"] == []
 
@@ -221,7 +238,7 @@ def test_point_inside_the_generous_box_but_outside_the_training_area_gets_a_warn
 
 # ---------------------------------------------------------------- unseen categories
 def test_unseen_complaint_type_is_accepted_with_a_warning(client, saved_model):
-    payload = {**BASE, "complaint_type": "Drone Delivery Complaint"}
+    payload = {**BASE, "complaint_type": "Drone Delivery Complaint", "location_type": "Street/Sidewalk"}
     response = client.post("/predict", json=payload)
     assert response.status_code == 200
     body = response.json()
