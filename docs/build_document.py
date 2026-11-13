@@ -89,13 +89,25 @@ NB03_PATH = "notebooks/03_model_comparison.ipynb"
 NB01, T01 = notebook(NB01_PATH)
 NB02, T02 = notebook(NB02_PATH)
 NB03, T03 = notebook(NB03_PATH)
+NB04, T04 = notebook("notebooks/04_stacking.ipynb")
+NB05, T05 = notebook("notebooks/05_stacking_improvement.ipynb")
+NB06, T06 = notebook("notebooks/06_final_model_xgboost.ipynb")
+STACKVAL = read_csv("reports/stacking_validation.csv")
+TESTV1 = read_csv("reports/test_results.csv")
+EXPS = read_csv("reports/stacking_experiments.csv")
+V2VAL = read_csv("reports/stacking_v2_validation.csv")
+FWD = read_csv("reports/test_forward_results.csv")
+FINALVAL = read_csv("reports/final_model_validation.csv")
+META = json.loads(git_show("models/model_meta.json"))
+METRICS = json.loads(git_show("models/metrics.json"))
 CMP = read_csv("reports/model_comparison.csv")
 TUNE = read_csv("reports/tuning_results.csv")
 LOG = read_csv("reports/cleaning_log.csv")
 SEL = read_csv("reports/feature_selection.csv")
 BEST = json.loads(git_show("reports/best_settings.json"))
 FETCH = git_show("src/fetch_data.py")
-SOURCES = {"nb01": NB01, "nb02": NB02, "nb03": NB03, "fetch": FETCH,
+SOURCES = {"nb01": NB01, "nb02": NB02, "nb03": NB03, "nb04": NB04, "nb05": NB05, "nb06": NB06, "fetch": FETCH,
+           "meta": git_show("models/model_meta.json"), "metrics": git_show("models/metrics.json"),
            "log": LOG.to_csv(index=False), "sel": SEL.to_csv(index=False)}
 
 
@@ -597,17 +609,18 @@ def section_1():
       "model, and returns the prediction.")
     BUL(["**Data and cleaning** (sections 3 and 4). A sample of closed requests is pulled, checked and cleaned.",
          "**Models** (sections 5 and 6). Six candidate models are compared and the best three are chosen.",
-         "**Meta-classifier** (section 7). The three models are combined with a stacking classifier.",
+         "**Meta-classifier and final model** (section 7). The models are combined with a stacking classifier, which is compared with its base models. "
+         "The final model, XGBoost alone, is then chosen and explained.",
          "**Deployment** (sections 8 to 10). A FastAPI service on an AWS EC2 server returns predictions and is tested "
          "end to end."])
     H2("1.4 How this document is organised")
-    P("The sections follow the course template. Sections 1 to 6 describe finished work (Phases 0 to 5 of the project "
-      "plan). Sections 7 to 11 are marked **TO BE COMPLETED** until their phase is finished. Section 12 is written now.")
+    P("The sections follow the course template. Sections 1 to 7 describe finished work (Phases 0 to 6c of the project "
+      "plan). Sections 8 to 11 are marked **TO BE COMPLETED** until their phase is finished. Section 12 is written now.")
     TABLE(["Section", "Title", "Phase", "Status"],
           [["1", "Introduction", "0", "Filled"], ["2", "Objective", "2", "Filled"],
            ["3", "Dataset Column Details", "1, 2, 4", "Filled"], ["4", "Data Cleaning and Graph Plot", "3, 4", "Filled"],
            ["5", "Model Selection and Train Each Model", "5", "Filled"], ["6", "Selecting best 3 Models", "5", "Filled"],
-           ["7", "Use Meta Classifier and Create final model", "6", "To be completed"],
+           ["7", "Use Meta Classifier and Create final model", "6, 6b, 6c", "Filled"],
            ["8", "Create EC2 instance", "8", "To be completed"], ["9", "Deploy Model on EC2", "8", "To be completed"],
            ["10", "Test Model using Postman (API Call)", "9", "To be completed"],
            ["11", "Colab Link", "10", "To be completed"], ["12", "Future Scope", "-", "Filled"]],
@@ -671,7 +684,7 @@ def section_2():
           [["1", "Data cleaning and preprocessing, with charts and stated decisions", "Sections 3 and 4", "Filled"],
            ["2", "Feature selection, with the target and a reason for each feature", "Sections 2 and 3", "Filled"],
            ["3", "Model selection, training and testing, with a metric comparison", "Sections 5 and 6", "Filled"],
-           ["4", "A meta-classifier (stacking) compared with its base models", "Section 7", "To be completed"],
+           ["4", "A meta-classifier (stacking) compared with its base models", "Section 7", "Filled"],
            ["5", "Deployment on EC2 with an API, tested end to end", "Sections 8 to 10", "To be completed"]],
           [0.8, 8.2, 4.0, 2.9], "The five course requirements and where each one is covered.", align=["c", "l", "l", "l"])
 
@@ -1162,11 +1175,166 @@ def section_6():
 
 
 def section_7():
-    PENDING(6, ["The three base models (XGBoost, Bernoulli Naive Bayes, Random Forest) and the tuned settings of each.",
-                "How the stacking classifier combines their predictions: the final estimator, the cross-validation used inside it and the weight given to each model.",
-                "A table comparing the stack with each single model on the validation split (macro F1, ROC-AUC, class 0 recall) and the confusion matrices.",
-                "The test-split result, scored once.",
-                "The saved pipeline (`models/model.joblib`), its file size, and the fresh-process check that it loads and predicts."])
+    sv = STACKVAL.set_index("model")
+    t1 = TESTV1.set_index("model")
+    ex = EXPS.set_index("experiment")
+    v2 = V2VAL.set_index("model")
+    fw = FWD[FWD["test_set"] == "forward test (clean)"].set_index("model")
+    fv = FINALVAL.set_index("model")
+    f3 = lambda x: f"{x:.3f}"
+    f4 = lambda x: f"{x:.4f}"
+
+    def metric_rows(frame, names, labels=None):
+        return [[(labels or {}).get(m, m), f3(frame.loc[m, "accuracy"]), f3(frame.loc[m, "precision_0"]), f3(frame.loc[m, "recall_0"]),
+                 f3(frame.loc[m, "macro_f1"]), f3(frame.loc[m, "roc_auc"])] for m in names]
+
+    metric_heads = ["Model", "Accuracy", "Class 0 precision", "Class 0 recall", "Macro F1", "ROC-AUC"]
+    metric_widths = [4.9, 2.0, 2.3, 2.2, 2.2, 2.3]
+    metric_align = ["l", "r", "r", "r", "r", "r"]
+
+    # ------------------------------------------------------------------ 7.1
+    H2("7.1 The stacking classifier")
+    P("A **stacking classifier** lets several different models each give a probability that a request will be resolved within 7 days. "
+      "A small final model, the **final estimator**, then learns how much to trust each of them and gives the final answer. "
+      "The idea is that models which make different mistakes can correct each other.")
+    BUL(["**Base models.** The three models selected in section 6: XGBoost, Bernoulli Naive Bayes and Random Forest, each with the settings tuned in section 5.",
+         "**Final estimator.** A Logistic Regression that takes the three probabilities as input.",
+         "**One pipeline.** The saved model is a single scikit-learn pipeline: the shared cleaning step turns the raw fields into the 12 features, then each base model applies its own encoder and gives its probability, then the final estimator combines them.",
+         "**Out-of-fold predictions.** The final estimator must learn from probabilities that the base models gave for requests they had **not** been trained on, otherwise it would trust the model that memorises best. "
+         "The training split is cut into 5 folds and every training request gets one honest prediction from each base model.",
+         "**A known compromise.** Everywhere else the folds respect time (`TimeSeriesSplit`), but a stack needs an out-of-fold prediction for every row, which `TimeSeriesSplit` cannot give. "
+         "The stack therefore uses 5-fold stratified cross-validation with shuffling. This stays inside the training split, so the validation and test splits remain in the future of every training request.",
+         "**Fitted on the training split only.** The model was not refitted on training plus validation, so the saved file matches the reported scores."])
+    rows = []
+    for m in ["XGBoost", "Bernoulli Naive Bayes", "Random Forest"]:
+        rows.append([m, ", ".join(f"{k}={v}" for k, v in BEST[m].items())])
+    TABLE(["Base model", "Tuned setting (from section 5)"], rows, [4.0, 11.9], "The three base models of the first stack (`reports/best_settings.json`).", font=8.5, align=["l", "l"])
+
+    # ------------------------------------------------------------------ 7.2
+    H2("7.2 The stack compared with its base models (validation split)")
+    names = ["Stack", "XGBoost", "Random Forest", "Bernoulli Naive Bayes", "Simple average of the 3", "Baseline: complaint type only"]
+    labels = {"Stack": "**Stack (first version)**"}
+    TABLE(metric_heads, metric_rows(sv, names, labels), metric_widths,
+          "The first stack against each of its base models, the plain average of the three, and the baseline (`reports/stacking_validation.csv`). Class 0 is \"not resolved within 7 days\".",
+          font=8.5, align=metric_align)
+    gap_f1 = (sv.loc["Stack", "macro_f1"] - sv.loc["XGBoost", "macro_f1"]) * 100
+    P(f"**The stack does not beat XGBoost alone.** Its macro F1 is {f4(sv.loc['Stack', 'macro_f1'])} against {f4(sv.loc['XGBoost', 'macro_f1'])} for XGBoost, "
+      f"{abs(gap_f1):.2f} points lower (95% range {n('nb04', '-1.00 to -0.45')} points), and the ROC-AUC is the same ({f4(sv.loc['Stack', 'roc_auc'])} against {f4(sv.loc['XGBoost', 'roc_auc'])}). "
+      f"It does better than Random Forest, Naive Bayes and the plain average, and than the complaint-type baseline, but not than its best member.")
+    P(f"**What the final estimator learned.** Its weights are {n('nb04', '+4.378')} for XGBoost, {n('nb04', '+5.083')} for Random Forest and {n('nb04', '-1.267')} for Naive Bayes "
+      f"(intercept {n('nb04', '-4.150')}). The negative weight is not an error: Naive Bayes is correlated with the other two but more extreme, so the stack uses it as a correction. "
+      "Because the three probabilities are so alike, the individual weights are not a reliable ranking of the models.")
+    FIG("06_validation_confusion_matrices.png", "Confusion matrices of the first stack and of the other models on the validation split.", 15.5)
+
+    # ------------------------------------------------------------------ 7.3
+    H2("7.3 The test split, scored once")
+    P("The test split was read exactly once, after the validation results were saved and committed.")
+    names = ["Stack", "XGBoost", "Random Forest", "Bernoulli Naive Bayes", "Baseline: complaint type only"]
+    TABLE(metric_heads, metric_rows(t1, names, {"Stack": "**Stack (first version)**"}), metric_widths,
+          "Test split (29,831 requests, scored once; `reports/test_results.csv`).", font=8.5, align=metric_align)
+    stack_drop = (t1.loc["Stack", "macro_f1"] - sv.loc["Stack", "macro_f1"]) * 100
+    xgb_drop = (t1.loc["XGBoost", "macro_f1"] - sv.loc["XGBoost", "macro_f1"]) * 100
+    P(f"**Same order as on validation.** XGBoost ({f4(t1.loc['XGBoost', 'macro_f1'])}) is ahead of the stack ({f4(t1.loc['Stack', 'macro_f1'])}) by "
+      f"{(t1.loc['XGBoost', 'macro_f1'] - t1.loc['Stack', 'macro_f1']) * 100:.2f} points. Macro F1 fell from validation to test by {abs(stack_drop):.2f} points for the stack and "
+      f"{abs(xgb_drop):.2f} points for XGBoost. All models fell, and the share of slow requests was higher in the test period ({n('nb04', '18.3%')} against 16.8% in validation), "
+      "so this is a change in the data rather than a failure of one model.")
+
+    # ------------------------------------------------------------------ 7.4
+    H2("7.4 Trying to improve the stack")
+    P("Because the test split had been seen, it could no longer be used to choose anything. Three things were done before any change was made.")
+    BUL([f"**A fresh forward test set.** Closed requests created from 2026-09-01 to 2026-10-28, after everything else, pulled with the same script and cleaned with the same rules: "
+         f"{n('nb05', '12,069')} requests, with {n('nb05', '15.5%')} in class 0. It is cleaner than the old test split because no model had been scored on it. "
+         f"It is also somewhat easier than reality: {n('nb05', '9.2%')} of the requests of that period were still open when the data was pulled and are missing from it.",
+         f"**A diagnosis.** At the usual cut-off of 0.5 the stack was {n('nb05', '0.73')} points behind XGBoost. When each model gets a cut-off chosen on the training rows, "
+         f"the gap is {n('nb05', '0.08')} points, and {n('nb05', '0.03')} points at each model's best cut-off. The two models have the same ceiling: most of the first gap was only the position of the cut-off.",
+         "**Seven experiments** with different base models, a gradient boosting final estimator and a tuned cut-off, all fitted on the training split only and judged on the validation split."])
+    FIG("07_macro_f1_by_threshold.png", "Macro F1 against the cut-off, on the training rows (out-of-fold) and on the validation rows.", 15.0)
+    rows = []
+    for key, r in ex.iterrows():
+        rows.append([key, r["description"], f"{r['threshold']:.2f}", f4(r["macro_f1"]), f4(r["roc_auc"]), f"{r['file_mb']:.1f}", f"{r['predict_one_ms']:.0f}"])
+    rows.append(["-", "**XGBoost alone** (cut-off 0.5, for comparison)", "0.50", f4(v2.loc["XGBoost alone", "macro_f1"]), f4(v2.loc["XGBoost alone", "roc_auc"]), "1.8", "-"])
+    TABLE(["Exp.", "Stack tried", "Cut-off", "Macro F1", "ROC-AUC", "MB", "ms"], rows, [1.2, 7.2, 1.6, 1.7, 1.7, 1.2, 1.3],
+          "The seven experiments on the validation split (`reports/stacking_experiments.csv`). MB and ms: size of the models and time for one prediction.",
+          font=8, align=["c", "l", "r", "r", "r", "r", "r"])
+    P(f"**Result.** All seven stacks lie between {f4(ex['macro_f1'].min())} and {f4(ex['macro_f1'].max())} macro F1, a range smaller than the noise of the validation split. "
+      f"The winner by the rule set beforehand (highest validation macro F1) was experiment c2, with macro F1 {f4(ex.loc['c2', 'macro_f1'])}. "
+      f"The success criterion fixed in advance (at least equal to XGBoost alone on macro F1, with ROC-AUC not lower) was **{n('nb05', 'NOT MET')}**: it is {abs(ex.loc['c2', 'macro_f1'] - v2.loc['XGBoost alone', 'macro_f1']) * 100:.2f} points below.")
+    names = ["Stack v2", "XGBoost alone", "Stack v1 (Phase 6)", "Baseline: complaint type only"]
+    TABLE(metric_heads, metric_rows(fw, names, {"Stack v2": "**Improved stack**", "Stack v1 (Phase 6)": "First stack"}), metric_widths,
+          "The forward test set (12,069 requests, scored once; `reports/test_forward_results.csv`).", font=8.5, align=metric_align)
+    P(f"**On the forward test set the improved stack and XGBoost alone are level** (macro F1 {f4(fw.loc['Stack v2', 'macro_f1'])} against {f4(fw.loc['XGBoost alone', 'macro_f1'])}; the difference is far inside the noise). "
+      f"The improvement over the first stack is real ({(fw.loc['Stack v2', 'macro_f1'] - fw.loc['Stack v1 (Phase 6)', 'macro_f1']) * 100:.1f} points of macro F1), but the stack still does not beat XGBoost.")
+
+    # ------------------------------------------------------------------ 7.5
+    H2("7.5 Decision: XGBoost alone is the final model")
+    P("The course instructor's rule is: **if the stacking model is not as good as XGBoost alone, use XGBoost alone, and explain it clearly.** "
+      "That is the case here, so the final model is XGBoost alone. The choice follows from the validation split and the rule; the test numbers agree with it but did not decide it.")
+    rows = []
+    for label, val, fwd in [("First stack", sv.loc["Stack"], fw.loc["Stack v1 (Phase 6)"]), ("Improved stack", v2.loc["Stack v2"], fw.loc["Stack v2"]),
+                            ("**XGBoost alone**", v2.loc["XGBoost alone"], fw.loc["XGBoost alone"])]:
+        rows.append([label, f4(val["macro_f1"]), f4(val["roc_auc"]), f4(fwd["macro_f1"]), f4(fwd["roc_auc"])])
+    TABLE(["Model", "Validation macro F1", "Validation ROC-AUC", "Forward test macro F1", "Forward test ROC-AUC"], rows, [4.7, 2.8, 2.8, 2.8, 2.8],
+          "The two stacks and XGBoost alone, on the validation split and on the forward test set.", font=8.5, align=["l", "r", "r", "r", "r"])
+    P("**Why the stack did not help.**")
+    BUL([f"**The two models say almost the same thing.** Their probabilities are {n('nb06', '0.976')} correlated and they give a different class for only {n('nb06', '630')} of 29,830 validation requests (2.1%). "
+         f"On those, the stack is right {n('nb06', '365')} times and XGBoost {n('nb06', '265')} times: a small gain in accuracy that the stack spends on flagging fewer slow requests.",
+         "**There was little room to gain.** The models inside the stack are 0.93 to 0.99 correlated, and the best they could do together was to be right for 1.5 points more requests than XGBoost alone.",
+         "**Most of the first gap was only the cut-off** (section 7.4).",
+         f"**A stack costs more.** It is 11 times larger ({n('nb06', '19.84')} MB against {n('nb06', '1.81')} MB), more than twice as slow for one prediction, holds four models plus a final estimator, "
+         "and its weights are hard to read."])
+    P("**This is not a failure of the method.** Stacking helps when the base models make different mistakes. Here almost all of the information sits in two columns (the complaint type and the place), "
+      "which every model reads in the same way, so there is nothing for a combination to add. The assignment asked for a meta-classifier to be built and compared with its base models. "
+      "That was done; the honest result is that it did not beat its best member.")
+
+    # ------------------------------------------------------------------ 7.6
+    H2("7.6 The final model: what it is and what it learned")
+    P("**What it is.** One XGBoost model, which builds 600 small decision trees one after another, each correcting the mistakes of the ones before. "
+      "It uses the settings tuned in section 5 (depth 8, learning rate 0.05, extra attention to the slow requests) and predicts \"resolved within 7 days\" when its probability is above 0.5. "
+      "It is fitted on the training split only.")
+    rows = [["Validation split (29,830 requests)", f4(fv.loc["XGBoost alone", "macro_f1"]), f4(fv.loc["XGBoost alone", "roc_auc"]), pct(fv.loc["XGBoost alone", "recall_0"]),
+             pct(fv.loc["XGBoost alone", "precision_0"]), pct(fv.loc["XGBoost alone", "accuracy"])],
+            ["**Forward test set** (12,069 requests, never used to choose anything)", f4(fw.loc["XGBoost alone", "macro_f1"]), f4(fw.loc["XGBoost alone", "roc_auc"]),
+             pct(fw.loc["XGBoost alone", "recall_0"]), pct(fw.loc["XGBoost alone", "precision_0"]), pct(fw.loc["XGBoost alone", "accuracy"])],
+            ["Original test split (29,831 requests, scored in Phase 6)", f4(t1.loc["XGBoost", "macro_f1"]), f4(t1.loc["XGBoost", "roc_auc"]), pct(t1.loc["XGBoost", "recall_0"]),
+             pct(t1.loc["XGBoost", "precision_0"]), pct(t1.loc["XGBoost", "accuracy"])]]
+    TABLE(["Data", "Macro F1", "ROC-AUC", "Slow requests caught", "Slow flags that are right", "Accuracy"], rows, [6.2, 1.8, 1.8, 2.1, 2.1, 1.9],
+          "Results of the final model. \"Slow requests caught\" is the recall of class 0 and \"slow flags that are right\" its precision.", font=8.5, align=["l", "r", "r", "r", "r", "r"])
+    P("**What it learned.**")
+    BUL([f"**It recognises what kind of request was reported and which city service handles it.** The complaint type and the place (`location_type`) together carry between 81% and 93% of the importance "
+         f"(gain {n('nb06', '82.5%')}, mean contribution {n('nb06', '80.9%')}, permutation {n('nb06', '93.3%')}). Coordinates, borough, ZIP code and the time of filing together carry about 5%.",
+         "**Police-handled requests and heating complaints are almost always closed within 7 days; housing repair requests are the slow ones.** For parking, driveways, abandoned vehicles and noise, "
+         "the complaint type and the place together push the prediction strongly towards fast. For plumbing, paint, doors and windows and unsanitary conditions, the place `RESIDENTIAL BUILDING` pushes it towards slow.",
+         f"**The place is a fingerprint of the agency.** `STREET/SIDEWALK` is {n('nb06', '98.5%')} police requests and {n('nb06', '99.8%')} are resolved within 7 days; `RESIDENTIAL BUILDING` is {n('nb06', '99.3%')} housing requests "
+         f"and only {n('nb06', '63.3%')} are. The agency was left out as a feature because a person filing a request cannot give it, but the place brings much of it back.",
+         f"**The spelling of the place can flip a prediction.** The same unsanitary-condition request gets a probability of {n('nb06', '0.447')} (slow) when the place is written `RESIDENTIAL BUILDING` and {n('nb06', '0.986')} (fast) when it is written "
+         "`Residential Building/House`. The place must be given the way the 311 system records it."])
+    FIG("08_importance_three_ways.png", "What the final model relies on, measured three ways (validation split).", 14.0)
+    FIG("08_complaint_type_contributions.png", "The complaint types and places that push hardest towards slow and towards fast (log-odds; validation split).", 15.0)
+    P("**Why one request gets its prediction.** XGBoost can split each prediction into one contribution per feature (in log-odds: +1 multiplies the odds of \"fast\" by about 2.7). "
+      "For the five sample requests, one or two inputs decide the answer and the rest add very little.")
+    FIG("08_sample_explanations.png", "The largest contributions for the five sample requests (validation split).", 16.0)
+    P("**How to read the probability.**")
+    BUL([f"**It is a score, not an exact chance.** In the middle of the range the real share resolved within 7 days is 7 to 17 points higher than the probability (for example {n('nb06', '82.2%')} really fast for requests scored 0.6 to 0.7), "
+         "because the model was trained to pay extra attention to the slow requests. Above 0.9 (64% of all requests) the probability and the real share agree.",
+         "**The cut-off of 0.5 is a balance.** A higher cut-off catches more slow requests but raises more false alarms. Macro F1 is flat between 0.4 and 0.6."])
+    FIG("08_calibration.png", "The model's probability against the real share resolved within 7 days (validation split).", 9.5)
+    P("**What it cannot do.**")
+    BUL([f"**It rarely tells which request of a given kind will be slow.** Inside a complaint type its ROC-AUC has a median of only {n('nb06', '0.62')}; it almost never flags Street Condition, Snow or Ice or Traffic Signal requests as slow.",
+         f"**It needs the place.** Without `location_type` the macro F1 falls from 0.835 to {n('nb06', '0.652')} and the model catches {n('nb06', '27.7%')} of the slow requests instead of 81.9%. The API returns a warning in that case.",
+         "**It does not know new complaint types** (it is practically random on them), and the city renames types from time to time (the water and sewer types were renamed in 2026).",
+         "**It uses only what is known when the request is filed.** It cannot know an agency's workload, the weather, or what happens afterwards. The sample holds closed requests only."])
+
+    # ------------------------------------------------------------------ 7.7
+    H2("7.7 The saved model and the checks")
+    P(f"The final model is saved as one pipeline, `models/model.joblib` (version {META['model_version']}), of {METRICS['file_size_mb']:.2f} MB, built with Python {META['versions']['python']}, "
+      f"scikit-learn {META['versions']['scikit-learn']} and XGBoost {META['versions']['xgboost']}. It takes the raw fields of a request and returns a probability, so the API needs no other code than the three files in `src/`. "
+      "The file is not stored in Git: it is copied to the server with `scp` (section 9). The two stacks are kept (`models/model_stack_v2.joblib` and `models/model_v1.joblib`) and can be rebuilt from the code.")
+    BUL([f"**Fresh-process check.** `python -I src/check_saved_model.py` loads the file in a new Python process, checks its SHA-256 ({META['sha256'][:16]}...) and the library versions against `models/model_meta.json`, "
+         "and sends the five sample requests of `data/sample_requests.json` as raw dictionaries. The probabilities equal the ones saved by the notebook, and the five requests sent together give the same answers.",
+         "**Reproducible.** `python -m src.train` rebuilds the model from the training split and gives the saved validation scores and the saved probabilities exactly (difference 0).",
+         "**Description files.** `models/model_meta.json` lists the 9 raw fields the API receives, the label meaning, the cut-off, the split dates and the library versions; `models/metrics.json` holds the scores."])
+    P("**Which numbers are clean.** The forward test set (12,069 requests) was never used to choose anything and is the number to quote. The scores of XGBoost on the original test split were obtained "
+      "with settings and a cut-off fixed before that split was opened. The validation scores of the improved stack are slightly optimistic because it was the best of seven experiments.", italic=True)
 
 
 def section_8():
