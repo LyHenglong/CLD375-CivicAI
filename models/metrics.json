@@ -77,6 +77,6 @@
     "forward_test_roc_auc": 0.932739
   },
   "file_size_mb": 1.81,
-  "predict_one_request_ms": 36.6,
+  "predict_one_request_ms": 46.4,
   "predict_one_request_note": "median of 60 calls on the development laptop, model only (no web server), one raw request dict"
 }
