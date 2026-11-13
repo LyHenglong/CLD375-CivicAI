@@ -91,6 +91,7 @@ civicai-ec2/
   requirements.txt        # full development list
   requirements-api.txt    # only what the API server needs, pinned to models/model_meta.json
   pytest.ini
+  .gitattributes          # keeps deploy/civicai.service and requirements-api.txt in Unix (LF) format
   .gitignore              # data/, models/, .env, *.pem, __pycache__/
   data/
     raw/                  # unchanged API pull
@@ -130,7 +131,10 @@ civicai-ec2/
     test_api.py
   deploy/
     civicai.service
-    ec2_setup.md
+    ec2_setup.md          # the runbook: Part A (AWS console), Part B (commands), C (troubleshooting)
+    copy_to_ec2.ps1       # PowerShell: copies the 11 files the server needs with scp (-DryRun, -StageTo)
+    smoke_test.py         # checks a running API (localhost or EC2): PASS/FAIL table
+    screenshot_checklist.md
   docs/
     screenshots/
     postman/civicai.postman_collection.json
@@ -153,7 +157,7 @@ Do the phases in order. Each phase ends with its acceptance check, a short summa
 | 6b. Stack improvement | Nov 12 | In notebook 05: freeze v1 (tag `phase6-v1`); build a fresh forward test set; diagnose the gap to XGBoost (it was the decision threshold: 0.73 points at 0.5, 0.08 with tuned cut-offs); run 7 experiments logged in `reports/stacking_experiments.csv` (v1 members with a tuned cut-off, with and without class weights; XGBoost+LR+NB; XGBoost+LR+NB+RF; XGBoost+LR; two XGBoost depths; a gradient boosting final estimator); pick the winner by validation macro F1; refit on train only; score the forward test once | Done: winner XGBoost+LR+NB+RF, cut-off 0.61. Success criterion not met on validation (-0.12 points vs XGBoost alone); level with XGBoost alone on the clean forward test; +3.0 points over v1 |
 | 6c. Final model: XGBoost alone | Nov 13 | Apply the instructor's rule (use XGBoost when the stack is not as good); save XGBoost alone as `models/model.joblib` (version 3.0) and keep the stacks as comparison; write the interpretation in notebook 06 (decision, why the stack did not help, what XGBoost is, what it learned, single-request explanations, how far the probability can be trusted, where it is weaker, what happens when optional fields are missing); update the API, tests and Postman collection | Done: validation macro F1 0.8351; clean forward test 0.8070; 71 tests pass; median 62 ms per request over HTTP |
 | 7. API | Nov 20-21 | Build the FastAPI app as specified in Section 6 and the tests in `tests/test_api.py` | `pytest` passes; `uvicorn app.main:app` runs locally; `/docs` shows the routes. Done: 71 tests pass (after Phase 6c); also tested over real HTTP with uvicorn; Postman collection in `docs/postman/` |
-| 8. Deployment files | Nov 21-22 | Write `deploy/civicai.service` and `deploy/ec2_setup.md` (Section 7); the student runs them on EC2 | The student reports that `GET /health` works at the public address |
+| 8. Deployment files | Nov 21-22 | Write `deploy/civicai.service`, `deploy/ec2_setup.md` (Section 7), `deploy/copy_to_ec2.ps1`, `deploy/smoke_test.py` and `deploy/screenshot_checklist.md`; the student runs them on EC2 | The student reports that `GET /health` works at the public address. Done locally in Phase 8: the 11 copied files plus a venv built only from `requirements-api.txt` start with the unit's command and pass the smoke test (12 of 12); the copy script was tested with `-DryRun` and `-StageTo` (nothing was sent anywhere) |
 | 9. End-to-end tests | Nov 23-24 | Make `tests/test_api.py` run against a remote URL from the `API_URL` environment variable; add a Postman collection under `docs/`; list the screenshots the student must capture | Valid and invalid requests behave as in Section 6 against the live EC2 API |
 | 10. Report support | Nov 24-25 | Write `reports/summary.md` with results tables, figure list and limitations, and a `README.md` with run steps | Every number in the summary comes from a saved results file |
 
@@ -252,35 +256,61 @@ Postman: import `docs/postman/civicai.postman_collection.json`; its variable `ba
 
 You write the files and the step-by-step commands. The student runs them on their own AWS account, because you must not hold AWS credentials or key files.
 
-**Write `deploy/ec2_setup.md` with these steps, each with the exact command:**
+**Built in Phase 8, in `deploy/`:**
 
-1. Launch an Ubuntu EC2 instance. Start small, and check the model file size and memory use before choosing. Measured on the development laptop: the model file is about 1.8 MB and the whole API process uses about 160 MB, so the smallest general-purpose instance (1 GB of memory) is enough. Check current pricing and free-tier terms first.
-2. Create a key pair and a security group: SSH only from the student's IP, and one TCP port for the API (8000).
-3. Connect over SSH and install `python3-venv` and `python3-pip`.
-4. Copy `app/`, `src/__init__.py`, `src/preprocessing.py`, `src/features.py`, `models/model.joblib`, `models/model_meta.json` and `requirements-api.txt` to the server with `scp`, keeping the same folder layout. The saved pipeline needs the three `src/` files to load. `models/cleaning_values.json` is not needed on the server. `models/model.joblib` is not in Git, so it must be copied with `scp` (about 20 MB). To check the copy on the server, also copy `src/check_saved_model.py` and `data/sample_requests.json` and run `python -I src/check_saved_model.py` from the project root; it verifies the SHA-256 and the library versions in `model_meta.json` and the five sample probabilities.
-5. Create a virtual environment on the server and install `requirements-api.txt` (not the full `requirements.txt`). The scikit-learn version (1.7.2) must match `model_meta.json`; use the same xgboost, pandas, numpy and joblib versions too.
-6. Test by running `python -m uvicorn app.main:app --host 0.0.0.0 --port 8000` from the project root (so that `src` can be imported), then call `GET /health` from the student's laptop using the instance's public address.
-7. Install the `systemd` service below so the API restarts and survives closing the terminal.
-8. Stop the instance when not testing. Its public address changes after a stop and start unless an Elastic IP is attached, so update `API_URL` each time.
+| File | What it is |
+| --- | --- |
+| `ec2_setup.md` | The runbook for a first-time student. **Part A**: AWS console choices with the reason for each. **Part B**: the commands (copy with scp, build the venv, foreground test, install the systemd unit, reboot test, update the model later). **C**: troubleshooting table |
+| `civicai.service` | The systemd unit, commented line by line in plain words |
+| `copy_to_ec2.ps1` | Copies the 11 files with scp. Mandatory parameters `-KeyPath -HostName -User` (no defaults); `-DryRun` prints the commands; `-StageTo <folder>` copies the same list locally; checks the files exist, that `model.joblib` matches the SHA-256 in `model_meta.json`, that `civicai.service` and `requirements-api.txt` have LF line endings; refuses `.pem`/`.key`/`.env`, `data/`, `notebooks/`, `.git` and anything not on the list; refuses a key inside the project folder; compares the model's SHA-256 on the server afterwards |
+| `smoke_test.py` | `python deploy/smoke_test.py <base_url>`: checks `/health`, `/model-info`, the 5 valid sample requests (probability to 6 decimals) and the 3 invalid ones (422 naming the field), `/docs`; prints a PASS/FAIL table; exit code 0 only if all pass |
+| `screenshot_checklist.md` | The 19 screenshots for sections 8, 9 and 10, in order, with file names and the document placeholder each one fills |
 
-**Write `deploy/civicai.service`:**
+**The choices** (reasons are in `ec2_setup.md`; the student makes them in the console):
+
+| Item | Choice |
+| --- | --- |
+| Billing | An AWS Budgets alert **before** launching anything |
+| Region | Asia Pacific (Singapore) `ap-southeast-1`, the nearest to Cambodia |
+| AMI | Ubuntu Server **22.04 LTS**, 64-bit x86 (system Python 3.10.12; the model was built with 3.10.10). On 24.04 (Python 3.12) the runbook gives the `deadsnakes` commands for Python 3.10 |
+| Instance type | **t3.micro** (2 vCPU, 1 GiB), or the type the wizard labels "Free tier eligible" (free-tier rules changed on 15 July 2025: older accounts get 12 months of 750 hours, newer accounts a credit-based Free plan); the API uses about 160 MB of memory |
+| Key pair | `civicai-key`, RSA, `.pem`, stored in `%USERPROFILE%\.ssh` **outside the project**; Windows permissions fixed with `icacls` |
+| Security group | `civicai-sg`: SSH 22 from **My IP** only, custom TCP 8000 from `0.0.0.0/0` for the demo (a trade-off: no login, no HTTPS; close it after grading), nothing else |
+| Disk | Default 8 GiB gp3 |
+| Elastic IP | Skip by default: since 2024 AWS charges about 0.005 USD per hour for every public IPv4 address, in use or not. The public address changes after every stop and start, so `API_URL` must be updated |
+| Stop / terminate | Stop the instance after each session; terminate it after grading |
+
+**Files copied to the server** (11 files, about 1.9 MB, under `/home/ubuntu/civicai/`): `app/__init__.py`, `app/main.py`, `app/predictor.py`, `app/schemas.py`; `src/__init__.py`, `src/features.py`, `src/preprocessing.py` (the only three `src` files the API and the saved model import); `models/model.joblib`, `models/model_meta.json`; `requirements-api.txt`; `deploy/civicai.service`. **Never** `data/`, `notebooks/`, `reports/`, `tests/`, `docs/`, `.git`, a `.pem`/`.key` file or `.env`. `src/check_saved_model.py` and `data/sample_requests.json` are not copied: the smoke test is run from the laptop.
+
+**Steps on the server** (exact commands in `ec2_setup.md`): install `python3-venv` and `python3-pip`; `python3 -m venv venv`; `pip install --no-cache-dir -r requirements-api.txt` (not the full `requirements.txt`; scikit-learn 1.7.2 must match `model_meta.json`); a foreground test with `python -m uvicorn app.main:app --host 0.0.0.0 --port 8000` from the project root; install the unit (`sudo cp ... /etc/systemd/system/`, `daemon-reload`, `enable --now`); check with `systemctl status civicai` and `journalctl -u civicai -f`; reboot test (the service must come back by itself); to update the model, copy again and `sudo systemctl restart civicai`.
+
+**`deploy/civicai.service`** (comments omitted here; the file explains every line):
 
 ```ini
 [Unit]
-Description=CivicAI API
+Description=CivicAI API (FastAPI served by uvicorn)
 After=network.target
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
+Type=simple
 User=ubuntu
+Group=ubuntu
 WorkingDirectory=/home/ubuntu/civicai
-ExecStart=/home/ubuntu/civicai/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+Environment=CIVICAI_MODEL_PATH=/home/ubuntu/civicai/models/model.joblib
+Environment=CIVICAI_LOG_DIR=/home/ubuntu/civicai/logs
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/ubuntu/civicai/venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
 Restart=always
+RestartSec=5
+TimeoutStopSec=15
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-After the student confirms the instance is running, you may call the public `/health` and `/predict` routes with `curl` or `pytest` using the `API_URL` the student provides. Do not touch AWS itself.
+After the student confirms the instance is running, you may call the public `/health` and `/predict` routes with `curl`, `python deploy/smoke_test.py <API_URL>` or `pytest` using the `API_URL` the student provides. Do not touch AWS itself.
 
 ## 8. Ready-to-paste prompts
 

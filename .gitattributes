@@ -1,0 +1,4 @@
+# Files that are copied to the Linux server must keep Unix line endings (LF),
+# even when they are checked out on Windows (Windows-style CRLF breaks systemd and pip).
+deploy/civicai.service text eol=lf
+requirements-api.txt text eol=lf

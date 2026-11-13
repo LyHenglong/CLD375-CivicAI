@@ -1,0 +1,68 @@
+# CivicAI API as a systemd service.
+#
+# What this file is for: systemd is the part of Ubuntu that starts programs when the
+# server boots and restarts them if they stop. With this file the API starts by itself
+# after a reboot and keeps running after you close your SSH window.
+#
+# Where it goes on the server:  /etc/systemd/system/civicai.service
+# (ec2_setup.md, Part B, step 9, shows the exact commands.)
+#
+# It assumes the project is in /home/ubuntu/civicai and the virtual environment
+# (the private Python with the packages from requirements-api.txt) is in
+# /home/ubuntu/civicai/venv. If you use other folders, change the paths below.
+
+[Unit]
+# A name shown by "systemctl status" and in the logs.
+Description=CivicAI API (FastAPI served by uvicorn)
+# Start only after the network is up, so the API can listen on its port.
+After=network.target
+# Safety brake. If the service crashes 5 times within 2 minutes (for example because the
+# model file is missing), systemd stops trying and marks it "failed" instead of restarting
+# it forever and filling the log. After fixing the cause, run:
+#   sudo systemctl reset-failed civicai && sudo systemctl start civicai
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+# "simple" = the command below IS the service; systemd watches that one process.
+Type=simple
+
+# Run as the normal "ubuntu" user, not as root. If the API had a security hole,
+# a program running as root could do much more damage.
+User=ubuntu
+Group=ubuntu
+
+# Start the command from the project root. This matters: the saved model needs the
+# "src" package, and Python finds it because this folder is the current folder.
+WorkingDirectory=/home/ubuntu/civicai
+
+# Settings for the API. These are ordinary settings, not secrets (there are no secrets
+# in this project). Do NOT put keys, tokens or passwords in this file.
+#   Where the saved model file is (the API reads it once, when it starts):
+Environment=CIVICAI_MODEL_PATH=/home/ubuntu/civicai/models/model.joblib
+#   Where the prediction log file is written (no coordinates or ZIP codes are logged):
+Environment=CIVICAI_LOG_DIR=/home/ubuntu/civicai/logs
+#   Show Python messages in the log straight away instead of in delayed blocks:
+Environment=PYTHONUNBUFFERED=1
+
+# The command that runs the API:
+#   venv/bin/python -m uvicorn   = uvicorn from the virtual environment (not the system Python)
+#   app.main:app                 = the "app" object inside app/main.py
+#   --host 0.0.0.0               = accept connections from other computers (127.0.0.1 would
+#                                  only accept the server itself)
+#   --port 8000                  = the port that the security group opens
+#   --workers 1                  = a single process: the model is loaded once, which keeps
+#                                  memory low on a small server (this API is light)
+ExecStart=/home/ubuntu/civicai/venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
+
+# If the process ever stops for any reason, start it again...
+Restart=always
+# ...but wait 5 seconds first, so a crash loop does not use up the CPU.
+RestartSec=5
+
+# Gives uvicorn time to finish a request when the service is stopped or restarted.
+TimeoutStopSec=15
+
+[Install]
+# "enable" links this service into the normal boot sequence, so it starts at boot.
+WantedBy=multi-user.target
