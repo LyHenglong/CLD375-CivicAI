@@ -17,6 +17,8 @@ models/*
 # small text file of cleaning values, needed by the API (not a model file)
 !models/cleaning_values.json
 # small text files that describe the model (no secrets): needed by the API and the report
+# the deployed model (XGBoost alone, 1.8 MB, no secrets) is committed so a teammate can pull it; the 20 MB stacks stay out
+!models/model.joblib
 !models/model_meta.json
 !models/metrics.json
 !data/raw/.gitkeep
